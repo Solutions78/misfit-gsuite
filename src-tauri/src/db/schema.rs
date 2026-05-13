@@ -1,0 +1,47 @@
+pub const SCHEMA: &str = "
+PRAGMA journal_mode=WAL;
+PRAGMA foreign_keys=ON;
+
+CREATE TABLE IF NOT EXISTS messages (
+    id TEXT PRIMARY KEY,
+    thread_id TEXT NOT NULL,
+    subject TEXT,
+    from_address TEXT,
+    snippet TEXT,
+    body_html TEXT,
+    label_ids TEXT DEFAULT '[]',
+    is_read INTEGER DEFAULT 0,
+    is_starred INTEGER DEFAULT 0,
+    has_attachment INTEGER DEFAULT 0,
+    internal_date INTEGER,
+    synced_at INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_messages_thread ON messages(thread_id);
+CREATE INDEX IF NOT EXISTS idx_messages_date ON messages(internal_date DESC);
+
+CREATE TABLE IF NOT EXISTS labels (
+    id TEXT PRIMARY KEY,
+    account_email TEXT NOT NULL,
+    name TEXT NOT NULL,
+    label_type TEXT,
+    messages_total INTEGER DEFAULT 0,
+    messages_unread INTEGER DEFAULT 0,
+    background_color TEXT,
+    text_color TEXT
+);
+
+CREATE TABLE IF NOT EXISTS sync_state (
+    account_email TEXT PRIMARY KEY,
+    history_id TEXT,
+    last_synced_at INTEGER,
+    watch_expiration INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS accounts (
+    email TEXT PRIMARY KEY,
+    display_name TEXT,
+    picture_url TEXT,
+    added_at INTEGER
+);
+";

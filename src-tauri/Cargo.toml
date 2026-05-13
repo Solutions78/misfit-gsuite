@@ -1,0 +1,60 @@
+[package]
+name = "misfit-gsuite"
+version = "0.1.0"
+description = "Misfit GSuite - Google Workspace Desktop Client"
+authors = ["Modular Misfits"]
+edition = "2021"
+
+[lib]
+name = "misfit_gsuite_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["macos-private-api"] }
+tauri-plugin-opener = "2"
+tauri-plugin-shell = "2"
+tauri-plugin-notification = "2"
+tauri-plugin-window-state = "2"
+tauri-plugin-store = "2"
+tauri-plugin-deep-link = "2"
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# HTTP client
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Date/time
+chrono = { version = "0.4", features = ["serde"] }
+
+# Database
+rusqlite = { version = "0.31", features = ["bundled"] }
+
+# Keychain (macOS)
+keyring = { version = "2", features = [] }
+
+# Local HTTP server for OAuth callback
+axum = { version = "0.7", features = ["tokio"] }
+
+# PKCE OAuth2
+url = "2"
+base64 = "0.22"
+uuid = { version = "1", features = ["v4"] }
+rand = "0.8"
+sha2 = "0.10"
+
+# Error handling
+anyhow = "1"
+thiserror = "1"
+dirs-next = "2"
+urlencoding = "2"
+
+[features]
+custom-protocol = ["tauri/custom-protocol"]

@@ -1,0 +1,94 @@
+@import "tailwindcss";
+
+:root {
+  --sidebar-width: 220px;
+  --chat-panel-width: 280px;
+  --titlebar-height: 28px;
+  color-scheme: light dark;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
+  background: #f8f9fa;
+  color: #1f2937;
+  overflow: hidden;
+  height: 100vh;
+  user-select: none;
+}
+
+/* macOS traffic light drag region */
+.titlebar-drag-region {
+  -webkit-app-region: drag;
+  height: var(--titlebar-height);
+}
+
+button, a, input, textarea, select, [role="button"] {
+  -webkit-app-region: no-drag;
+}
+
+input, textarea {
+  user-select: text;
+}
+
+/* Scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #d1d5db;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #9ca3af;
+}
+
+/* Email body content area */
+.email-body {
+  user-select: text;
+  font-size: 14px;
+  line-height: 1.6;
+  color: #1f2937;
+}
+
+.email-body a {
+  color: #2563eb;
+  text-decoration: underline;
+}
+
+.email-body img {
+  max-width: 100%;
+  height: auto;
+}
+
+/* Fade-in animation */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.15s ease-out;
+}
+
+/* Slide-up animation for Gemini drawer */
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(20px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.animate-slide-up {
+  animation: slideUp 0.2s ease-out;
+}
