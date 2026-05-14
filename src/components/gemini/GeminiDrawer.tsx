@@ -8,7 +8,11 @@ import { cn } from "@/lib/utils";
 import type { GeminiMessage } from "@/types";
 
 export default function GeminiDrawer() {
-  const { setGeminiOpen, geminiTab, setGeminiTab, chatPanelOpen, selectedThreadId } = useUIStore();
+  const setGeminiOpen    = useUIStore((s) => s.setGeminiOpen);
+  const geminiTab        = useUIStore((s) => s.geminiTab);
+  const setGeminiTab     = useUIStore((s) => s.setGeminiTab);
+  const chatPanelOpen    = useUIStore((s) => s.chatPanelOpen);
+  const selectedThreadId = useUIStore((s) => s.selectedThreadId);
   const { chatHistory, addMessage, setLoading, isLoading, selectedEmailContext, setLastResponse } = useGeminiStore();
   const [input, setInput] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);

@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   AccountInfo,
   ThreadListResponse,
+  ThreadSummaryPage,
   GmailThread,
   GmailMessage,
   GmailLabel,
@@ -39,6 +40,15 @@ export const listThreads = (params: {
   pageToken?: string;
   maxResults?: number;
 }) => invoke<ThreadListResponse>("list_threads", { params });
+
+export const listThreadSummaries = (params: {
+  labelIds: string[];
+  pageToken?: string;
+  maxResults?: number;
+}) => invoke<ThreadSummaryPage>("list_thread_summaries", { params });
+
+export const searchThreadSummaries = (query: string, pageToken?: string) =>
+  invoke<ThreadSummaryPage>("search_thread_summaries", { query, pageToken });
 
 export const getThread = (threadId: string) =>
   invoke<GmailThread>("get_thread", { threadId });
@@ -83,6 +93,16 @@ export const markRead = (msgId: string, read: boolean) =>
   invoke<void>("mark_read", { msgId, read });
 
 export const listLabels = () => invoke<GmailLabel[]>("list_labels");
+
+export const createLabel = (name: string) =>
+  invoke<GmailLabel>("create_label", { name });
+
+export const getAttachment = (msgId: string, attachmentId: string) =>
+  invoke<string>("get_attachment", { msgId, attachmentId });
+
+export const syncInbox = () => invoke<void>("sync_inbox");
+
+export const drainPendingOps = () => invoke<number>("drain_pending_ops");
 
 // ── Calendar ──────────────────────────────────────────────────────────────
 

@@ -1,0 +1,172 @@
+/* Modular Misfits theme system */
+
+:root {
+  --mm-radius-sm: 4px;
+  --mm-radius-md: 6px;
+  --mm-radius-lg: 8px;
+  --mm-font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --mm-font-mono: "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+  --mm-transition: 120ms ease-out;
+}
+
+[data-theme="mm-cool-dark"] {
+  --mm-bg:             #0A1825;
+  --mm-surface:        #0F2A40;
+  --mm-elevated:       #173A55;
+  --mm-border:         #1F4868;
+  --mm-text-primary:   #E8EEF4;
+  --mm-text-secondary: #A3B4C4;
+  --mm-text-muted:     #6B8094;
+  --mm-accent:         #E66B66;
+  --mm-accent-hover:   #D64640;
+  --mm-accent-fg:      #FFFFFF;
+  --mm-brand-navy:     #2E5878;
+  --mm-success:        #6BB089;
+  --mm-warning:        #DEA950;
+  --mm-error:          #E66B66;
+  --mm-info:           #6CA8DD;
+}
+
+[data-theme="mm-neutral-dark"] {
+  --mm-bg:             #141414;
+  --mm-surface:        #1E1E1E;
+  --mm-elevated:       #2A2A2A;
+  --mm-border:         #3A3A3A;
+  --mm-text-primary:   #ECECEC;
+  --mm-text-secondary: #B0B0B0;
+  --mm-text-muted:     #7A7A7A;
+  --mm-accent:         #E66B66;
+  --mm-accent-hover:   #D64640;
+  --mm-accent-fg:      #FFFFFF;
+  --mm-brand-navy:     #2E5878;
+  --mm-success:        #6BAF8A;
+  --mm-warning:        #D4A04A;
+  --mm-error:          #E66B66;
+  --mm-info:           #7AA8D8;
+}
+
+[data-theme="mm-warm-dark"] {
+  --mm-bg:             #1A1612;
+  --mm-surface:        #25201B;
+  --mm-elevated:       #322B25;
+  --mm-border:         #423A33;
+  --mm-text-primary:   #ECE4DA;
+  --mm-text-secondary: #B5AC9F;
+  --mm-text-muted:     #80776B;
+  --mm-accent:         #E66B66;
+  --mm-accent-hover:   #D64640;
+  --mm-accent-fg:      #FFFFFF;
+  --mm-brand-navy:     #3A5878;
+  --mm-success:        #8AAF7A;
+  --mm-warning:        #D89F50;
+  --mm-error:          #E66B66;
+  --mm-info:           #8AA8C8;
+}
+
+[data-theme="mm-cool-light"] {
+  --mm-bg:             #FBFCFE;
+  --mm-surface:        #ECF1F7;
+  --mm-elevated:       #FFFFFF;
+  --mm-border:         #C8D4E2;
+  --mm-text-primary:   #0F2A40;
+  --mm-text-secondary: #3B5168;
+  --mm-text-muted:     #7A8B9E;
+  --mm-accent:         #D64640;
+  --mm-accent-hover:   #B83A35;
+  --mm-accent-fg:      #FFFFFF;
+  --mm-brand-navy:     #0F2A40;
+  --mm-success:        #2E8B57;
+  --mm-warning:        #B67400;
+  --mm-error:          #C8302B;
+  --mm-info:           #1E6FB8;
+}
+
+[data-theme="mm-neutral-light"] {
+  --mm-bg:             #FCFCFC;
+  --mm-surface:        #F0F0F0;
+  --mm-elevated:       #FFFFFF;
+  --mm-border:         #D0D0D0;
+  --mm-text-primary:   #1A1A1A;
+  --mm-text-secondary: #555555;
+  --mm-text-muted:     #8A8A8A;
+  --mm-accent:         #D64640;
+  --mm-accent-hover:   #B83A35;
+  --mm-accent-fg:      #FFFFFF;
+  --mm-brand-navy:     #0F2A40;
+  --mm-success:        #2E8B57;
+  --mm-warning:        #B67400;
+  --mm-error:          #C8302B;
+  --mm-info:           #1E6FB8;
+}
+
+[data-theme="mm-warm-light"] {
+  --mm-bg:             #FDF9F2;
+  --mm-surface:        #F2EBDD;
+  --mm-elevated:       #FFFFFF;
+  --mm-border:         #D8CAB3;
+  --mm-text-primary:   #2A1F12;
+  --mm-text-secondary: #5C4A38;
+  --mm-text-muted:     #8A7A66;
+  --mm-accent:         #D64640;
+  --mm-accent-hover:   #B83A35;
+  --mm-accent-fg:      #FFFFFF;
+  --mm-brand-navy:     #0F2A40;
+  --mm-success:        #5C8A3E;
+  --mm-warning:        #B67400;
+  --mm-error:          #C8302B;
+  --mm-info:           #2A6FAA;
+}
+
+/* ── Theme consumption ────────────────────────────────────────────────────── */
+
+html[data-theme], html[data-theme] body {
+  background: var(--mm-bg) !important;
+  color: var(--mm-text-primary) !important;
+  transition: background var(--mm-transition), color var(--mm-transition);
+}
+
+/* Override Tailwind grays with theme vars when a theme is active */
+html[data-theme] .bg-gray-50   { background-color: var(--mm-surface) !important; }
+html[data-theme] .bg-gray-100  { background-color: var(--mm-bg) !important; }
+html[data-theme] .bg-gray-200  { background-color: var(--mm-elevated) !important; }
+html[data-theme] .bg-white     { background-color: var(--mm-elevated) !important; }
+
+html[data-theme] .border-gray-100 { border-color: var(--mm-border) !important; }
+html[data-theme] .border-gray-200 { border-color: var(--mm-border) !important; }
+
+html[data-theme] .text-gray-900 { color: var(--mm-text-primary) !important; }
+html[data-theme] .text-gray-800 { color: var(--mm-text-primary) !important; }
+html[data-theme] .text-gray-700 { color: var(--mm-text-secondary) !important; }
+html[data-theme] .text-gray-600 { color: var(--mm-text-secondary) !important; }
+html[data-theme] .text-gray-500 { color: var(--mm-text-muted) !important; }
+html[data-theme] .text-gray-400 { color: var(--mm-text-muted) !important; }
+
+html[data-theme] .hover\:bg-gray-50:hover  { background-color: var(--mm-surface) !important; }
+html[data-theme] .hover\:bg-gray-100:hover { background-color: var(--mm-elevated) !important; }
+html[data-theme] .hover\:bg-gray-200:hover { background-color: var(--mm-elevated) !important; }
+
+html[data-theme] input,
+html[data-theme] textarea {
+  background-color: var(--mm-elevated) !important;
+  border-color: var(--mm-border) !important;
+  color: var(--mm-text-primary) !important;
+}
+
+html[data-theme] input::placeholder,
+html[data-theme] textarea::placeholder {
+  color: var(--mm-text-muted) !important;
+}
+
+/* Selected state */
+html[data-theme] .bg-blue-50  { background-color: color-mix(in srgb, var(--mm-accent) 12%, var(--mm-surface)) !important; }
+html[data-theme] .bg-blue-100 { background-color: color-mix(in srgb, var(--mm-accent) 20%, var(--mm-surface)) !important; }
+html[data-theme] .text-blue-700 { color: var(--mm-accent) !important; }
+
+/* Email body in theme */
+html[data-theme] .email-body { color: var(--mm-text-secondary) !important; }
+html[data-theme] .email-body * { color: var(--mm-text-secondary) !important; background-color: transparent !important; }
+html[data-theme] .email-body a { color: var(--mm-info) !important; }
+
+/* Snippet text — visible in all themes */
+.snippet-text { color: var(--mm-text-muted, #6b7280); }
+html[data-theme] .snippet-text { color: var(--mm-text-secondary) !important; }

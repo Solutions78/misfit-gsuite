@@ -4,7 +4,8 @@ import { useUIStore } from "@/store/uiStore";
 import { cn } from "@/lib/utils";
 
 export default function SearchBar() {
-  const { searchQuery, setSearchQuery } = useUIStore();
+  const searchQuery    = useUIStore((s) => s.searchQuery);
+  const setSearchQuery = useUIStore((s) => s.setSearchQuery);
   const [focused, setFocused] = useState(false);
 
   const handleClear = useCallback(() => {

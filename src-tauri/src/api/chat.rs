@@ -39,13 +39,23 @@ pub struct ChatMessageText {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ChatThread {
+    pub name: Option<String>,
+    pub thread_key: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ChatMessage {
     pub name: String,
     pub sender: Option<ChatUser>,
     pub create_time: Option<String>,
+    pub last_update_time: Option<String>,
+    pub delete_time: Option<String>,
     pub text: Option<String>,
-    pub thread: Option<serde_json::Value>,
     pub formatted_text: Option<String>,
+    pub thread: Option<ChatThread>,
+    pub thread_reply: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -56,6 +66,7 @@ pub struct MessageListResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SendMessageRequest {
     pub text: String,
 }
@@ -73,7 +84,7 @@ pub async fn list_messages(
     page_size: u32,
 ) -> Result<MessageListResponse, AppError> {
     let mut url = format!(
-        "{}/{}/messages?pageSize={}&orderBy=createTime%20desc",
+        "{}/{}/messages?pageSize={}&orderBy=createTime%20ASC",
         CHAT_BASE, space_name, page_size
     );
     if let Some(token) = page_token {

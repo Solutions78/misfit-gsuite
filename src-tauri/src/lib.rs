@@ -92,6 +92,8 @@ pub fn run() {
             commands::auth_commands::sign_out,
             // Gmail
             commands::gmail_commands::list_threads,
+            commands::gmail_commands::list_thread_summaries,
+            commands::gmail_commands::search_thread_summaries,
             commands::gmail_commands::get_thread,
             commands::gmail_commands::get_message,
             commands::gmail_commands::search_threads,
@@ -103,7 +105,11 @@ pub fn run() {
             commands::gmail_commands::archive_message,
             commands::gmail_commands::mark_read,
             commands::gmail_commands::list_labels,
+            commands::gmail_commands::get_attachment,
+            commands::gmail_commands::create_label,
             commands::gmail_commands::setup_gmail_watch,
+            commands::gmail_commands::sync_inbox,
+            commands::gmail_commands::drain_pending_ops,
             // Calendar
             commands::calendar_commands::list_calendars,
             commands::calendar_commands::list_events,

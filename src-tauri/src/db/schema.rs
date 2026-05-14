@@ -44,4 +44,18 @@ CREATE TABLE IF NOT EXISTS accounts (
     picture_url TEXT,
     added_at INTEGER
 );
+
+CREATE TABLE IF NOT EXISTS schema_migrations (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    applied_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+);
+
+CREATE TABLE IF NOT EXISTS pending_operations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    op_type TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+    attempts INTEGER NOT NULL DEFAULT 0
+);
 ";

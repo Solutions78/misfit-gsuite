@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 
 use crate::api::client::ApiClient;
 use crate::error::AppError;
@@ -59,6 +58,71 @@ pub struct ThreadListResponse {
     pub threads: Option<Vec<ThreadListItem>>,
     pub next_page_token: Option<String>,
     pub result_size_estimate: Option<i64>,
+}
+
+/// A lightweight thread summary for the list pane — fetched with metadata fields only.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadSummary {
+    pub id: String,
+    pub snippet: Option<String>,
+    pub from: Option<String>,
+    pub subject: Option<String>,
+    pub date: Option<String>,
+    pub internal_date: Option<String>,
+    pub is_unread: bool,
+    pub is_starred: bool,
+    pub message_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadSummaryPage {
+    pub threads: Vec<ThreadSummary>,
+    pub next_page_token: Option<String>,
+}
+
+// Intermediate deserialization for messages.get?format=METADATA
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MetaMessage {
+    id: String,
+    thread_id: String,
+    snippet: Option<String>,
+    label_ids: Option<Vec<String>>,
+    internal_date: Option<String>,
+    payload: Option<MetaPayload>,
+}
+
+#[derive(Debug, Deserialize)]
+struct MetaPayload {
+    headers: Option<Vec<MessageHeader>>,
+}
+
+// threads.list returns only id/snippet/historyId per thread
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ThreadStub {
+    id: String,
+    snippet: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ThreadStubListResponse {
+    threads: Option<Vec<ThreadStub>>,
+    next_page_token: Option<String>,
+}
+
+// threads.get returns messages array with id fields we can use to pick the first message
+#[derive(Debug, Deserialize)]
+struct ThreadWithMessageIds {
+    messages: Option<Vec<MessageIdOnly>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct MessageIdOnly {
+    id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -138,6 +202,120 @@ pub async fn list_threads(
     }
     let resp = client.get(&url).await?.json::<ThreadListResponse>().await?;
     Ok(resp)
+}
+
+pub async fn list_thread_summaries(
+    client: &ApiClient,
+    label_ids: &[String],
+    page_token: Option<&str>,
+    max_results: u32,
+) -> Result<ThreadSummaryPage, AppError> {
+    // Step 1: threads.list — returns id + snippet only (per API spec)
+    let mut url = format!("{}/threads?maxResults={}", GMAIL_BASE, max_results);
+    if !label_ids.is_empty() {
+        url.push_str(&format!("&labelIds={}", label_ids.join("&labelIds=")));
+    }
+    if let Some(token) = page_token {
+        url.push_str(&format!("&pageToken={}", urlencoding::encode(token)));
+    }
+    let list_resp = client.get(&url).await?.json::<ThreadStubListResponse>().await?;
+    let next_page_token = list_resp.next_page_token;
+    let stubs = list_resp.threads.unwrap_or_default();
+
+    // Step 2: For each thread, get the first message ID via threads.get?format=minimal&fields=messages/id
+    // then fetch that message with messages.get?format=METADATA concurrently
+    let threads = fetch_summaries_for_stubs(client, stubs, next_page_token).await?;
+    Ok(threads)
+}
+
+pub async fn search_thread_summaries(
+    client: &ApiClient,
+    query: &str,
+    page_token: Option<&str>,
+) -> Result<ThreadSummaryPage, AppError> {
+    let mut url = format!(
+        "{}/threads?maxResults=50&q={}",
+        GMAIL_BASE,
+        urlencoding::encode(query)
+    );
+    if let Some(token) = page_token {
+        url.push_str(&format!("&pageToken={}", urlencoding::encode(token)));
+    }
+    let list_resp = client.get(&url).await?.json::<ThreadStubListResponse>().await?;
+    let next_page_token = list_resp.next_page_token;
+    let stubs = list_resp.threads.unwrap_or_default();
+
+    fetch_summaries_for_stubs(client, stubs, next_page_token).await
+}
+
+async fn fetch_summary_for_stub(client: &ApiClient, stub: ThreadStub) -> ThreadSummary {
+    // threads.get?format=minimal returns messages array with id+labelIds per message
+    let thread_url = format!(
+        "{}/threads/{}?format=minimal",
+        GMAIL_BASE, stub.id
+    );
+
+    let thread_resp = client.get(&thread_url).await.ok();
+    let thread_data = if let Some(resp) = thread_resp {
+        resp.json::<ThreadWithMessageIds>().await.ok()
+    } else {
+        None
+    };
+
+    // Use the last message (most recent) for From/Date; first for Subject
+    let msgs = thread_data.and_then(|t| t.messages).unwrap_or_default();
+    let last_msg_id = msgs.last().map(|m| m.id.clone());
+    let msg_count = msgs.len().max(1);
+
+    let meta_msg: Option<MetaMessage> = if let Some(msg_id) = last_msg_id {
+        let msg_url = format!(
+            "{}/messages/{}?format=METADATA&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Date",
+            GMAIL_BASE, msg_id
+        );
+        match client.get(&msg_url).await {
+            Ok(resp) => resp.json::<MetaMessage>().await.ok(),
+            Err(_) => None,
+        }
+    } else {
+        None
+    };
+
+    let header = |name: &str| -> Option<String> {
+        meta_msg.as_ref()?.payload.as_ref()?.headers.as_ref()?.iter()
+            .find(|h| h.name.eq_ignore_ascii_case(name))
+            .map(|h| h.value.clone())
+    };
+
+    let labels = meta_msg.as_ref()
+        .and_then(|m| m.label_ids.as_ref())
+        .map(|l| l.clone())
+        .unwrap_or_default();
+
+    ThreadSummary {
+        id: stub.id,
+        snippet: stub.snippet,
+        from: header("From"),
+        subject: header("Subject"),
+        date: header("Date"),
+        internal_date: meta_msg.as_ref().and_then(|m| m.internal_date.clone()),
+        is_unread: labels.contains(&"UNREAD".to_string()),
+        is_starred: labels.contains(&"STARRED".to_string()),
+        message_count: msg_count,
+    }
+}
+
+async fn fetch_summaries_for_stubs(
+    client: &ApiClient,
+    stubs: Vec<ThreadStub>,
+    next_page_token: Option<String>,
+) -> Result<ThreadSummaryPage, AppError> {
+    // Sequential with bounded concurrency — avoids lifetime issues with &ApiClient
+    // For 50 threads this is fast enough; each call is ~50ms
+    let mut threads = Vec::with_capacity(stubs.len());
+    for stub in stubs {
+        threads.push(fetch_summary_for_stub(client, stub).await);
+    }
+    Ok(ThreadSummaryPage { threads, next_page_token })
 }
 
 pub async fn get_thread(client: &ApiClient, thread_id: &str) -> Result<Thread, AppError> {
@@ -270,4 +448,31 @@ pub fn build_raw_message(
     }
     let full = format!("{}\r\n{}", headers, html_body);
     URL_SAFE_NO_PAD.encode(full.as_bytes())
+}
+
+/// Fetch a message attachment and return it as a base64url string.
+pub async fn get_attachment(
+    client: &ApiClient,
+    msg_id: &str,
+    attachment_id: &str,
+) -> Result<String, AppError> {
+    let url = format!(
+        "{}/messages/{}/attachments/{}",
+        GMAIL_BASE, msg_id, attachment_id
+    );
+    let resp = client.get(&url).await?.json::<serde_json::Value>().await?;
+    let data = resp["data"]
+        .as_str()
+        .unwrap_or("")
+        .replace('-', "+")
+        .replace('_', "/");
+    Ok(data)
+}
+
+/// Create a new Gmail user label.
+pub async fn create_label(client: &ApiClient, name: &str) -> Result<Label, AppError> {
+    let url = format!("https://gmail.googleapis.com/gmail/v1/users/me/labels");
+    let body = serde_json::json!({ "name": name, "labelListVisibility": "labelShow", "messageListVisibility": "show" });
+    let resp = client.post(&url, &body).await?.json::<Label>().await?;
+    Ok(resp)
 }

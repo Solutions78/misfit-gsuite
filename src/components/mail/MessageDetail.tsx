@@ -3,12 +3,16 @@ import { getThread, archiveMessage, trashMessage, starMessage } from "@/lib/taur
 import { useUIStore } from "@/store/uiStore";
 import { useGeminiStore } from "@/store/geminiStore";
 import { extractHeader, extractBodyHtml, type GmailMessage } from "@/types";
-import { Archive, Trash2, Star, Reply, Forward, Sparkles, ChevronLeft, Loader2 } from "lucide-react";
+import { Archive, Trash2, Star, Reply, ReplyAll, Forward, Sparkles, ChevronLeft, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import EmailBody from "./EmailBody";
 
 export default function MessageDetail({ threadId }: { threadId: string }) {
   const queryClient = useQueryClient();
-  const { setSelectedThread, openCompose, setGeminiOpen, setGeminiTab } = useUIStore();
+  const setSelectedThread = useUIStore((s) => s.setSelectedThread);
+  const openCompose       = useUIStore((s) => s.openCompose);
+  const setGeminiOpen     = useUIStore((s) => s.setGeminiOpen);
+  const setGeminiTab      = useUIStore((s) => s.setGeminiTab);
   const { setEmailContext } = useGeminiStore();
 
   const { data: thread, isLoading } = useQuery({
@@ -32,7 +36,9 @@ export default function MessageDetail({ threadId }: { threadId: string }) {
     },
   });
 
-  const firstMsgId = thread?.messages?.[0]?.id;
+  const firstMsg = thread?.messages?.[0];
+  const lastMsg = thread?.messages?.[thread.messages.length - 1];
+  const firstMsgId = firstMsg?.id;
 
   const handleGeminiReply = () => {
     if (thread?.messages) {
@@ -67,9 +73,16 @@ export default function MessageDetail({ threadId }: { threadId: string }) {
   }
 
   const subject = extractHeader(thread.messages[0], "Subject") || "(no subject)";
+  const lastFrom = lastMsg ? extractHeader(lastMsg, "From") : "";
+  const lastMsgId = lastMsg?.id ?? "";
+  const allRecipients = [
+    extractHeader(lastMsg ?? firstMsg!, "From"),
+    extractHeader(lastMsg ?? firstMsg!, "To"),
+    extractHeader(lastMsg ?? firstMsg!, "Cc"),
+  ].filter(Boolean).join(", ");
 
   return (
-    <div className="flex flex-col h-full overflow-hidden bg-white">
+    <div className="flex flex-col h-full bg-white" style={{ minWidth: 0, width: "100%", overflow: "hidden" }}>
       {/* Toolbar */}
       <div className="flex items-center gap-2 px-4 py-3 border-b border-gray-100 flex-shrink-0" style={{ paddingTop: "calc(28px + 8px)" }}>
         <button
@@ -99,15 +112,46 @@ export default function MessageDetail({ threadId }: { threadId: string }) {
 
         <div className="flex items-center gap-1.5">
           <button
-            onClick={() => openCompose({ mode: "reply", subject: `Re: ${subject}`, threadId })}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
+            onClick={() => openCompose({
+              mode: "reply",
+              to: lastFrom,
+              subject: subject.startsWith("Re:") ? subject : `Re: ${subject}`,
+              threadId,
+            })}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 text-sm text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
           >
             <Reply className="w-3.5 h-3.5" />
             Reply
           </button>
           <button
+            onClick={() => openCompose({
+              mode: "reply",
+              to: allRecipients,
+              subject: subject.startsWith("Re:") ? subject : `Re: ${subject}`,
+              threadId,
+            })}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 text-sm text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
+          >
+            <ReplyAll className="w-3.5 h-3.5" />
+            Reply All
+          </button>
+          <button
+            onClick={() => {
+              const bodyHtml = lastMsg ? extractBodyHtml(lastMsg) : "";
+              openCompose({
+                mode: "forward",
+                subject: subject.startsWith("Fwd:") ? subject : `Fwd: ${subject}`,
+                body: `<br/><hr/><p>---------- Forwarded message ----------</p>${bodyHtml}`,
+              });
+            }}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 text-sm text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
+          >
+            <Forward className="w-3.5 h-3.5" />
+            Forward
+          </button>
+          <button
             onClick={handleGeminiReply}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-gradient-to-r from-blue-600 to-purple-600 text-white rounded-lg transition-opacity hover:opacity-90"
+            className="flex items-center gap-1.5 px-2.5 py-1.5 text-sm bg-gradient-to-r from-blue-600 to-purple-600 text-white rounded-lg transition-opacity hover:opacity-90"
           >
             <Sparkles className="w-3.5 h-3.5" />
             AI Reply
@@ -121,7 +165,7 @@ export default function MessageDetail({ threadId }: { threadId: string }) {
       </div>
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto px-6 py-4 space-y-6">
+      <div className="flex-1 overflow-y-auto overflow-x-hidden px-6 py-4 space-y-6" style={{ minWidth: 0, width: "100%", maxWidth: "100%", contain: "layout" }}>
         {thread.messages.map((msg) => (
           <MessageBubble key={msg.id} msg={msg} />
         ))}
@@ -157,10 +201,13 @@ function MessageBubble({ msg }: { msg: GmailMessage }) {
         )}
       </div>
 
-      <div
-        className="email-body"
-        dangerouslySetInnerHTML={{ __html: bodyHtml || `<p>${msg.snippet ?? ""}</p>` }}
-      />
+      <div style={{ width: "100%", maxWidth: "100%", overflow: "hidden", contain: "layout" }}>
+        <EmailBody
+          html={bodyHtml || `<p>${msg.snippet ?? ""}</p>`}
+          msg={msg}
+          className="email-body"
+        />
+      </div>
     </div>
   );
 }

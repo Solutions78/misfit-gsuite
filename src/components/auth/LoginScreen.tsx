@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Mail, Loader2 } from "lucide-react";
 import { startOAuthFlow } from "@/lib/tauri";
 import { useAuthStore } from "@/store/authStore";
+import TitleBar from "@/components/layout/TitleBar";
 
 export default function LoginScreen() {
   const [loading, setLoading] = useState(false);
@@ -23,7 +24,7 @@ export default function LoginScreen() {
 
   return (
     <div className="h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100">
-      <div className="titlebar-drag-region absolute top-0 left-0 right-0" />
+      <TitleBar />
       <div className="bg-white rounded-2xl shadow-xl p-10 flex flex-col items-center gap-6 w-80">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 bg-blue-600 rounded-xl flex items-center justify-center">

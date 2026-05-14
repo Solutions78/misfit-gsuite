@@ -3,7 +3,9 @@ import { Sparkles } from "lucide-react";
 import { useUIStore } from "@/store/uiStore";
 
 export default function GeminiButton() {
-  const { geminiOpen, toggleGemini, chatPanelOpen } = useUIStore();
+  const geminiOpen    = useUIStore((s) => s.geminiOpen);
+  const toggleGemini  = useUIStore((s) => s.toggleGemini);
+  const chatPanelOpen = useUIStore((s) => s.chatPanelOpen);
 
   return (
     <motion.button

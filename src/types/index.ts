@@ -49,6 +49,23 @@ export interface ThreadListResponse {
   resultSizeEstimate?: number;
 }
 
+export interface ThreadSummary {
+  id: string;
+  snippet?: string;
+  from?: string;
+  subject?: string;
+  date?: string;
+  internalDate?: string;
+  isUnread: boolean;
+  isStarred: boolean;
+  messageCount: number;
+}
+
+export interface ThreadSummaryPage {
+  threads: ThreadSummary[];
+  nextPageToken?: string;
+}
+
 export interface GmailThread {
   id: string;
   historyId?: string;
@@ -162,6 +179,11 @@ export interface Space {
   spaceType?: string;
 }
 
+export interface ChatThread {
+  name?: string;
+  threadKey?: string;
+}
+
 export interface ChatMessage {
   name: string;
   sender?: {
@@ -170,8 +192,12 @@ export interface ChatMessage {
     type?: string;
   };
   createTime?: string;
+  lastUpdateTime?: string;
+  deleteTime?: string;
   text?: string;
   formattedText?: string;
+  thread?: ChatThread;
+  threadReply?: boolean;
 }
 
 export interface ChatMessagePage {

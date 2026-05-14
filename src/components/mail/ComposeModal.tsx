@@ -10,7 +10,8 @@ import { X, Send, Bold, Italic, UnderlineIcon, List, Minimize2 } from "lucide-re
 import { cn } from "@/lib/utils";
 
 export default function ComposeModal() {
-  const { composeState, closeCompose } = useUIStore();
+  const composeState = useUIStore((s) => s.composeState);
+  const closeCompose = useUIStore((s) => s.closeCompose);
   const { lastResponse } = useGeminiStore();
   const queryClient = useQueryClient();
 
@@ -57,7 +58,8 @@ export default function ComposeModal() {
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 bg-gray-800 rounded-t-2xl flex-shrink-0">
         <span className="text-sm font-medium text-white">
-          {composeState?.mode === "reply" ? "Reply" : "New Message"}
+          {composeState?.mode === "reply" ? "Reply" :
+           composeState?.mode === "forward" ? "Forward" : "New Message"}
         </span>
         <div className="flex items-center gap-1.5">
           <button
