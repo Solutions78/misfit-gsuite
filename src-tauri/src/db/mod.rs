@@ -1,8 +1,8 @@
 pub mod queries;
 pub mod schema;
 
-use rusqlite::Connection;
 use crate::error::AppError;
+use rusqlite::Connection;
 
 pub fn initialize(conn: &Connection) -> Result<(), AppError> {
     conn.execute_batch(schema::SCHEMA)?;
@@ -13,21 +13,21 @@ pub fn initialize(conn: &Connection) -> Result<(), AppError> {
 /// Apply sequential schema migrations. Each migration is recorded in
 /// schema_migrations so it only runs once per database file.
 fn run_migrations(conn: &Connection) -> Result<(), AppError> {
-    let migrations: &[(&str, &str)] = &[
-        (
-            "001_add_date_header",
-            "ALTER TABLE messages ADD COLUMN date_header TEXT",
-        ),
-    ];
+    let migrations: &[(&str, &str)] = &[(
+        "001_add_date_header",
+        "ALTER TABLE messages ADD COLUMN date_header TEXT",
+    )];
 
     for (name, sql) in migrations {
         // Skip if already applied
-        let already_applied: bool = conn.query_row(
-            "SELECT COUNT(*) FROM schema_migrations WHERE name = ?1",
-            rusqlite::params![name],
-            |row| row.get::<_, i64>(0),
-        )
-        .unwrap_or(0) > 0;
+        let already_applied: bool = conn
+            .query_row(
+                "SELECT COUNT(*) FROM schema_migrations WHERE name = ?1",
+                rusqlite::params![name],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap_or(0)
+            > 0;
 
         if already_applied {
             continue;
@@ -44,7 +44,10 @@ fn run_migrations(conn: &Connection) -> Result<(), AppError> {
                 let col = parts[5];
                 let count: i64 = conn
                     .query_row(
-                        &format!("SELECT COUNT(*) FROM pragma_table_info('{}') WHERE name = ?1", table),
+                        &format!(
+                            "SELECT COUNT(*) FROM pragma_table_info('{}') WHERE name = ?1",
+                            table
+                        ),
                         rusqlite::params![col],
                         |row| row.get(0),
                     )
@@ -61,9 +64,7 @@ fn run_migrations(conn: &Connection) -> Result<(), AppError> {
             // Ignore "duplicate column" errors — column may exist from initial schema
             match conn.execute_batch(sql) {
                 Ok(_) => {}
-                Err(rusqlite::Error::SqliteFailure(ref e, _))
-                    if e.extended_code == 1 =>
-                {
+                Err(rusqlite::Error::SqliteFailure(ref e, _)) if e.extended_code == 1 => {
                     // error code 1 = SQLITE_ERROR which includes "duplicate column name"
                     // Treat as non-fatal
                 }

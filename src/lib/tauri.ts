@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { dbg } from "./debugLog";
 import type {
   AccountInfo,
   ThreadListResponse,
@@ -7,31 +8,55 @@ import type {
   GmailMessage,
   GmailLabel,
   SentMessage,
+  EmailView,
   CalendarItem,
   CalendarEvent,
   NewEvent,
   Space,
+  Membership,
+  Attachment,
+  UploadAttachmentResponse,
   ChatMessagePage,
   ChatMessage,
+  ContactSuggestion,
   GeminiChatRequest,
+  GeminiMessage,
+  DriveFile,
+  DriveFileListResponse,
+  SharedDriveListResponse,
+  DocContent,
 } from "@/types";
+
+const IS_DEV = import.meta.env.DEV;
+
+async function loggedInvoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+  if (IS_DEV) dbg("Tauri", `invoke: ${command}`, args ?? {});
+  try {
+    const result = await invoke<T>(command, args);
+    if (IS_DEV) dbg("Tauri", `success: ${command}`, result);
+    return result;
+  } catch (error) {
+    if (IS_DEV) dbg("Tauri", `error: ${command}`, error);
+    throw error;
+  }
+}
 
 // ── Auth ──────────────────────────────────────────────────────────────────
 
 export const startOAuthFlow = () =>
-  invoke<AccountInfo>("start_oauth_flow");
+  loggedInvoke<AccountInfo>("start_oauth_flow");
 
 export const getCurrentAccount = () =>
-  invoke<AccountInfo | null>("get_current_account");
+  loggedInvoke<AccountInfo | null>("get_current_account");
 
 export const listAccounts = () =>
-  invoke<AccountInfo[]>("list_accounts");
+  loggedInvoke<AccountInfo[]>("list_accounts");
 
 export const switchAccount = (email: string) =>
-  invoke<AccountInfo>("switch_account", { email });
+  loggedInvoke<AccountInfo>("switch_account", { email });
 
 export const signOut = (email: string) =>
-  invoke<void>("sign_out", { email });
+  loggedInvoke<void>("sign_out", { email });
 
 // ── Gmail ─────────────────────────────────────────────────────────────────
 
@@ -39,25 +64,31 @@ export const listThreads = (params: {
   labelIds: string[];
   pageToken?: string;
   maxResults?: number;
-}) => invoke<ThreadListResponse>("list_threads", { params });
+}) => loggedInvoke<ThreadListResponse>("list_threads", { params });
 
 export const listThreadSummaries = (params: {
   labelIds: string[];
   pageToken?: string;
   maxResults?: number;
-}) => invoke<ThreadSummaryPage>("list_thread_summaries", { params });
+}) => loggedInvoke<ThreadSummaryPage>("list_thread_summaries", { params });
 
 export const searchThreadSummaries = (query: string, pageToken?: string) =>
-  invoke<ThreadSummaryPage>("search_thread_summaries", { query, pageToken });
+  loggedInvoke<ThreadSummaryPage>("search_thread_summaries", { query, pageToken });
 
 export const getThread = (threadId: string) =>
-  invoke<GmailThread>("get_thread", { threadId });
+  loggedInvoke<GmailThread>("get_thread", { threadId });
+
+export const getEmailView = (msgId: string) =>
+  loggedInvoke<EmailView>("get_email_view", { msgId });
+
+export const getThreadView = (threadId: string) =>
+  loggedInvoke<EmailView[]>("get_thread_view", { threadId });
 
 export const getMessage = (msgId: string) =>
-  invoke<GmailMessage>("get_message", { msgId });
+  loggedInvoke<GmailMessage>("get_message", { msgId });
 
 export const searchThreads = (query: string, pageToken?: string) =>
-  invoke<ThreadListResponse>("search_threads", { query, pageToken });
+  loggedInvoke<ThreadListResponse>("search_threads", { query, pageToken });
 
 export const sendMessage = (params: {
   to: string;
@@ -65,96 +96,149 @@ export const sendMessage = (params: {
   htmlBody: string;
   inReplyTo?: string;
   references?: string;
-}) => invoke<SentMessage>("send_message", params);
+}) => loggedInvoke<SentMessage>("send_message", params);
 
 export const createDraft = (params: {
   to: string;
   subject: string;
   htmlBody: string;
   inReplyTo?: string;
-}) => invoke<unknown>("create_draft", params);
+}) => loggedInvoke<unknown>("create_draft", params);
 
 export const modifyMessage = (
   msgId: string,
   addLabels: string[],
   removeLabels: string[]
-) => invoke<void>("modify_message", { msgId, addLabels, removeLabels });
+) => loggedInvoke<void>("modify_message", { msgId, addLabels, removeLabels });
 
 export const trashMessage = (msgId: string) =>
-  invoke<void>("trash_message", { msgId });
+  loggedInvoke<void>("trash_message", { msgId });
 
 export const starMessage = (msgId: string, starred: boolean) =>
-  invoke<void>("star_message", { msgId, starred });
+  loggedInvoke<void>("star_message", { msgId, starred });
 
 export const archiveMessage = (msgId: string) =>
-  invoke<void>("archive_message", { msgId });
+  loggedInvoke<void>("archive_message", { msgId });
 
 export const markRead = (msgId: string, read: boolean) =>
-  invoke<void>("mark_read", { msgId, read });
+  loggedInvoke<void>("mark_read", { msgId, read });
 
-export const listLabels = () => invoke<GmailLabel[]>("list_labels");
+export const listLabels = () => loggedInvoke<GmailLabel[]>("list_labels");
 
 export const createLabel = (name: string) =>
-  invoke<GmailLabel>("create_label", { name });
+  loggedInvoke<GmailLabel>("create_label", { name });
 
 export const getAttachment = (msgId: string, attachmentId: string) =>
-  invoke<string>("get_attachment", { msgId, attachmentId });
+  loggedInvoke<string>("get_attachment", { msgId, attachmentId });
 
-export const syncInbox = () => invoke<void>("sync_inbox");
+export const syncInbox = () => loggedInvoke<void>("sync_inbox");
 
-export const drainPendingOps = () => invoke<number>("drain_pending_ops");
+export const drainPendingOps = () => loggedInvoke<number>("drain_pending_ops");
 
 // ── Calendar ──────────────────────────────────────────────────────────────
 
 export const listCalendars = () =>
-  invoke<CalendarItem[]>("list_calendars");
+  loggedInvoke<CalendarItem[]>("list_calendars");
 
 export const listEvents = (params: {
   calendarId: string;
   timeMin: string;
   timeMax: string;
   maxResults?: number;
-}) => invoke<CalendarEvent[]>("list_events", params);
+}) => loggedInvoke<CalendarEvent[]>("list_events", params);
 
 export const createEvent = (calendarId: string, event: NewEvent) =>
-  invoke<CalendarEvent>("create_event", { calendarId, event });
+  loggedInvoke<CalendarEvent>("create_event", { calendarId, event });
 
 export const updateEvent = (
   calendarId: string,
   eventId: string,
   event: Partial<CalendarEvent>
-) => invoke<CalendarEvent>("update_event", { calendarId, eventId, event });
+) => loggedInvoke<CalendarEvent>("update_event", { calendarId, eventId, event });
 
 export const deleteEvent = (calendarId: string, eventId: string) =>
-  invoke<void>("delete_event", { calendarId, eventId });
+  loggedInvoke<void>("delete_event", { calendarId, eventId });
 
 export const respondToEvent = (
   calendarId: string,
   eventId: string,
   responseStatus: "accepted" | "declined" | "tentative"
-) => invoke<CalendarEvent>("respond_to_event", { calendarId, eventId, responseStatus });
+) => loggedInvoke<CalendarEvent>("respond_to_event", { calendarId, eventId, responseStatus });
+
+// ── Drive ──────────────────────────────────────────────────────────────────
+
+export const listDriveFiles = (query?: string, pageToken?: string, pageSize?: number, driveId?: string) =>
+  loggedInvoke<DriveFileListResponse>("list_drive_files", { query, pageToken, pageSize, driveId });
+
+export const listSharedDrives = (pageToken?: string) =>
+  loggedInvoke<SharedDriveListResponse>("list_shared_drives", { pageToken });
+
+export const openDriveFile = (url: string) =>
+  loggedInvoke<void>("open_drive_file", { url });
+
+export const createDriveFolder = (name: string, parents?: string[]) =>
+  loggedInvoke<DriveFile>("create_drive_folder", { name, parents });
+
+export const deleteDriveFile = (fileId: string) =>
+  loggedInvoke<void>("delete_drive_file", { fileId });
+
+// ── Docs ──────────────────────────────────────────────────────────────────
+
+export const getDocument = (docId: string) =>
+  loggedInvoke<DocContent>("get_document", { docId });
+
+export const saveDocument = (docId: string, requests: object[]) =>
+  loggedInvoke<void>("save_document", { docId, requests });
+
+export const createDocument = (title: string, folderId?: string) =>
+  loggedInvoke<DocContent>("create_document", { title, folderId });
 
 // ── Chat ──────────────────────────────────────────────────────────────────
 
-export const listSpaces = () => invoke<Space[]>("list_spaces");
+export const listSpaces = () => loggedInvoke<Space[]>("list_spaces");
+
+export const searchChatContacts = (query: string) =>
+  loggedInvoke<ContactSuggestion[]>("search_chat_contacts", { query });
+
+export const listSpaceMembers = (spaceName: string) =>
+  loggedInvoke<Membership[]>("list_space_members", { spaceName });
+
+export const setupChatSpace = (space: Space, memberships: Membership[]) =>
+  loggedInvoke<Space>("setup_chat_space", { space, memberships });
 
 export const listChatMessages = (
   spaceName: string,
   pageToken?: string,
   pageSize?: number
-) => invoke<ChatMessagePage>("list_chat_messages", { spaceName, pageToken, pageSize });
+) => loggedInvoke<ChatMessagePage>("list_chat_messages", { spaceName, pageToken, pageSize });
 
-export const sendChatMessage = (spaceName: string, text: string) =>
-  invoke<ChatMessage>("send_chat_message", { spaceName, text });
+export const sendChatMessage = (
+  spaceName: string,
+  text: string,
+  attachments?: Attachment[]
+) => loggedInvoke<ChatMessage>("send_chat_message", { spaceName, text, attachments });
+
+export const uploadChatAttachment = (
+  spaceName: string,
+  filename: string,
+  mimeType: string,
+  data: Uint8Array
+) => loggedInvoke<UploadAttachmentResponse>("upload_chat_attachment", { spaceName, filename, mimeType, data });
+
+export const deleteChatSpace = (spaceName: string) =>
+  loggedInvoke<void>("delete_chat_space", { spaceName });
 
 // ── Gemini ────────────────────────────────────────────────────────────────
 
 export const geminiChat = (request: GeminiChatRequest) =>
-  invoke<string>("gemini_chat", { request });
+  loggedInvoke<string>("gemini_chat", { request });
 
 export const generateEmailReply = (threadId: string, instructions?: string) =>
-  invoke<string>("generate_email_reply", { threadId, instructions });
+  loggedInvoke<string>("generate_email_reply", { threadId, instructions });
 
-export const organizeInbox = () => invoke<string>("organize_inbox");
+export const organizeInbox = () => loggedInvoke<string>("organize_inbox");
 
-export const generateDailyReport = () => invoke<string>("generate_daily_report");
+export const generateDailyReport = () => loggedInvoke<string>("generate_daily_report");
+
+export const geminiChatWithSearch = (messages: GeminiMessage[], context?: string, webSearch?: boolean) =>
+  loggedInvoke<string>("gemini_chat_with_search", { messages, context, webSearch: webSearch ?? false });

@@ -1,62 +1,43 @@
 import { useEffect, useRef } from "react";
-import { getAttachment } from "@/lib/tauri";
-import type { GmailMessage, GmailMessagePart } from "@/types";
+import type { EmailView } from "@/types";
 
 interface Props {
-  html: string;
-  msg: GmailMessage;
+  view: EmailView;
   className?: string;
 }
 
-export default function EmailBody({ html, msg, className }: Props) {
-  const ref = useRef<HTMLDivElement>(null);
+function sanitizeHtml(raw: string): string {
+  if (!raw) return "";
+  return raw
+    // Remove width/height/min-width attributes on tags entirely
+    .replace(/\s+width\s*=\s*["']?\d+%?["']?/gi, "")
+    .replace(/\s+height\s*=\s*["']?\d+%?["']?/gi, "")
+    // Strip fixed px widths and min-widths from inline styles
+    .replace(/([\s;]width\s*:\s*)\d+px/gi, "$1100%")
+    .replace(/([\s;]min-width\s*:\s*)\d+px/gi, "$110px")
+    // Strip fixed px widths set at the start of a style attribute
+    .replace(/(style\s*=\s*["'][^"']*\bwidth\s*:\s*)\d+px/gi, "$1100%");
+}
 
-  useEffect(() => {
-    if (!ref.current) return;
-    const imgs = Array.from(ref.current.querySelectorAll("img[src]")) as HTMLImageElement[];
-    for (const img of imgs) {
-      const src = img.getAttribute("src") ?? "";
-      if (src.startsWith("cid:")) {
-        const contentId = src.slice(4).replace(/[<>]/g, "");
-        const part = findPartByContentId(msg.payload, contentId);
-        if (part?.body?.attachmentId) {
-          getAttachment(msg.id, part.body.attachmentId)
-            .then((b64) => {
-              img.src = `data:${part.mimeType ?? "image/png"};base64,${b64}`;
-            })
-            .catch(() => { img.style.display = "none"; });
-        } else if (part?.body?.data) {
-          // Inline data already present in the payload
-          img.src = `data:${part.mimeType ?? "image/png"};base64,${part.body.data.replace(/-/g, "+").replace(/_/g, "/")}`;
-        } else {
-          img.style.display = "none";
-        }
-      }
-    }
-  }, [html, msg]);
+export default function EmailBody({ view, className }: Props) {
+  const ref = useRef<HTMLDivElement>(null);
+  
+  // Replace cid: references with data URIs from the backend map
+  let html = view.bodyHtml;
+  Object.entries(view.cidMap).forEach(([cid, dataUri]) => {
+    // Search for cid:ID or cid:<ID>
+    const regex = new RegExp(`src=["']cid:<?${cid.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}>?["']`, 'gi');
+    html = html.replace(regex, `src="${dataUri}"`);
+  });
+
+  const sanitized = sanitizeHtml(html);
 
   return (
     <div
       ref={ref}
       className={className}
       style={{ maxWidth: "100%", overflowX: "hidden", wordBreak: "break-word" }}
-      dangerouslySetInnerHTML={{ __html: html }}
+      dangerouslySetInnerHTML={{ __html: sanitized }}
     />
   );
-}
-
-function findPartByContentId(
-  part: GmailMessagePart | undefined,
-  contentId: string
-): GmailMessagePart | null {
-  if (!part) return null;
-  if (part.headers) {
-    const cid = part.headers.find((h) => h.name.toLowerCase() === "content-id");
-    if (cid && cid.value.replace(/[<>]/g, "") === contentId) return part;
-  }
-  for (const sub of part.parts ?? []) {
-    const found = findPartByContentId(sub, contentId);
-    if (found) return found;
-  }
-  return null;
 }

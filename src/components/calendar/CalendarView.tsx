@@ -16,6 +16,7 @@ import {
 } from "date-fns";
 import { useQuery } from "@tanstack/react-query";
 import { listCalendars, listEvents } from "@/lib/tauri";
+import { useUIStore } from "@/store/uiStore";
 import { ChevronLeft, ChevronRight, Plus, Calendar } from "lucide-react";
 import { cn } from "@/lib/utils";
 import MonthView from "./MonthView";
@@ -30,9 +31,11 @@ export default function CalendarView() {
   const [viewMode, setViewMode] = useState<ViewMode>("week");
   const [currentDate, setCurrentDate] = useState(new Date());
   const [selectedCalendars, setSelectedCalendars] = useState<Set<string>>(new Set(["primary"]));
-  const [showEventModal, setShowEventModal] = useState(false);
-  const [editingEvent, setEditingEvent] = useState<CalendarEvent | null>(null);
-  const [newEventDate, setNewEventDate] = useState<Date | null>(null);
+  
+  const eventModalOpen = useUIStore((s) => s.eventModalOpen);
+  const eventModalData = useUIStore((s) => s.eventModalData);
+  const openEventModal = useUIStore((s) => s.openEventModal);
+  const closeEventModal = useUIStore((s) => s.closeEventModal);
 
   const { data: calendars } = useQuery({
     queryKey: ["calendars"],
@@ -71,63 +74,22 @@ export default function CalendarView() {
   };
 
   const handleDayClick = (date: Date) => {
-    setNewEventDate(date);
-    setEditingEvent(null);
-    setShowEventModal(true);
+    openEventModal(null, date);
   };
 
   const handleEventClick = (event: CalendarEvent) => {
-    setEditingEvent(event);
-    setShowEventModal(true);
+    openEventModal(event);
   };
 
   return (
-    <div className="flex h-full bg-white overflow-hidden">
-      {/* Calendar sidebar */}
-      <div className="w-48 flex-shrink-0 border-r border-gray-200 flex flex-col py-4 px-3" style={{ paddingTop: "calc(28px + 12px)" }}>
-        <button
-          onClick={() => { setShowEventModal(true); setEditingEvent(null); }}
-          className="flex items-center gap-2 px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-medium transition-colors mb-4"
-        >
-          <Plus className="w-4 h-4" />
-          New event
-        </button>
-
-        {/* Calendar list */}
-        <div className="space-y-1">
-          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide px-1 mb-2">
-            My calendars
-          </p>
-          {calendars?.map((cal) => (
-            <label
-              key={cal.id}
-              className="flex items-center gap-2.5 px-2 py-1.5 rounded-lg hover:bg-gray-50 cursor-pointer"
-            >
-              <input
-                type="checkbox"
-                checked={selectedCalendars.has(cal.id)}
-                onChange={(e) => {
-                  const next = new Set(selectedCalendars);
-                  if (e.target.checked) next.add(cal.id);
-                  else next.delete(cal.id);
-                  setSelectedCalendars(next);
-                }}
-                className="rounded"
-                style={{ accentColor: cal.backgroundColor ?? "#2563eb" }}
-              />
-              <span className="text-sm text-gray-700 truncate">{cal.summary ?? cal.id}</span>
-            </label>
-          ))}
-        </div>
-      </div>
-
+    <div className="flex flex-1 h-full bg-white overflow-hidden">
       {/* Main calendar area */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
         {/* Toolbar */}
-        <div className="flex items-center gap-3 px-4 py-3 border-b border-gray-100 flex-shrink-0" style={{ paddingTop: "calc(28px + 8px)" }}>
+        <div className="flex items-center gap-3 px-4 py-3 border-b border-gray-100 flex-shrink-0">
           <button
             onClick={() => setCurrentDate(new Date())}
-            className="px-3 py-1.5 text-sm border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
+            className="px-3 py-1.5 text-xs font-bold border border-gray-200 rounded-xl hover:bg-gray-50 transition-all uppercase tracking-tighter"
           >
             Today
           </button>
@@ -141,19 +103,19 @@ export default function CalendarView() {
             </button>
           </div>
 
-          <h2 className="text-base font-semibold text-gray-900 flex-1">
+          <h2 className="text-sm font-black text-gray-900 flex-1 uppercase tracking-tight ml-2">
             {formatHeader(viewMode, currentDate)}
           </h2>
 
           {/* View switcher */}
-          <div className="flex bg-gray-100 rounded-lg p-0.5">
+          <div className="flex bg-gray-100 p-1 rounded-xl">
             {(["month", "week", "day"] as ViewMode[]).map((v) => (
               <button
                 key={v}
                 onClick={() => setViewMode(v)}
                 className={cn(
-                  "px-3 py-1 rounded-md text-xs font-medium capitalize transition-colors",
-                  viewMode === v ? "bg-white text-gray-900 shadow-sm" : "text-gray-600 hover:text-gray-800"
+                  "px-4 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all",
+                  viewMode === v ? "bg-white text-blue-600 shadow-sm" : "text-gray-400 hover:text-gray-600"
                 )}
               >
                 {v}
@@ -163,7 +125,7 @@ export default function CalendarView() {
         </div>
 
         {/* Calendar content */}
-        <div className="flex-1 overflow-hidden">
+        <div className="flex-1 overflow-hidden bg-white">
           {viewMode === "month" && (
             <MonthView
               currentDate={currentDate}
@@ -192,11 +154,11 @@ export default function CalendarView() {
       </div>
 
       {/* Event modal */}
-      {showEventModal && (
+      {eventModalOpen && (
         <EventModal
-          event={editingEvent}
-          initialDate={newEventDate}
-          onClose={() => setShowEventModal(false)}
+          event={eventModalData?.event}
+          initialDate={eventModalData?.initialDate}
+          onClose={closeEventModal}
         />
       )}
     </div>

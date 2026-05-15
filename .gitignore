@@ -25,7 +25,9 @@ dist-ssr
 .env
 
 # AI Artifacts
+AGENTS.md
 CLAUDE.md
 GEMINI.md
+MEMORY.md
 SKILL.md
 UNIVERSAL_SWARM_RULES.md

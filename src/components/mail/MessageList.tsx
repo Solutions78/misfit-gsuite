@@ -1,13 +1,13 @@
 import { useEffect, useRef, useMemo, useState, useCallback } from "react";
 import { useInfiniteQuery, useMutation, useQueryClient, useQuery } from "@tanstack/react-query";
-import { useVirtualizer } from "@tanstack/react-virtual";
-import { dbg, dbgRender } from "@/lib/debugLog";
-import { listThreadSummaries, searchThreadSummaries, syncInbox, trashMessage, listLabels, createLabel, modifyMessage } from "@/lib/tauri";
+import { listThreadSummaries, searchThreadSummaries, syncInbox, trashMessage, listLabels, createLabel, modifyMessage, getThreadView } from "@/lib/tauri";
 import { useUIStore } from "@/store/uiStore";
 import { cn } from "@/lib/utils";
 import { RefreshCw, Loader2, ArrowUpDown, CalendarDays, User2, Star, X, ChevronDown } from "lucide-react";
 import SearchBar from "./SearchBar";
+import { isOtherThread } from "@/lib/domainFilter";
 import type { ThreadSummary, GmailLabel } from "@/types";
+import MessagePopup from "@/components/common/MessagePopup";
 
 function formatDate(date?: string, internalDate?: string): string {
   const ts = internalDate ? parseInt(internalDate) : date ? Date.parse(date) : NaN;
@@ -30,9 +30,6 @@ function formatSender(from?: string): string {
 
 
 export default function MessageList() {
-  const renderCount = useRef(0);
-  renderCount.current += 1;
-
   // Fine-grained selectors — one per field — so this component only re-renders
   // when that specific field changes, not on every store update.
   const selectedLabel     = useUIStore((s) => s.selectedLabel);
@@ -43,10 +40,15 @@ export default function MessageList() {
   const setSortDir        = useUIStore((s) => s.setSortDir);
   const selectedThreadId  = useUIStore((s) => s.selectedThreadId);
   const setSelectedThread = useUIStore((s) => s.setSelectedThread);
+  const inboxTab          = useUIStore((s) => s.inboxTab);
+  const setInboxTab       = useUIStore((s) => s.setInboxTab);
+
+  const isInbox = selectedLabel === "INBOX" && !searchQuery;
 
   const parentRef = useRef<HTMLDivElement>(null);
   const [syncing, setSyncing] = useState(false);
   const [moveModal, setMoveModal] = useState<{ threadId: string; msgId: string } | null>(null);
+  const [popupThreadId, setPopupThreadId] = useState<string | null>(null);
   const queryClient = useQueryClient();
 
   const threadsQuery = useInfiniteQuery({
@@ -72,49 +74,54 @@ export default function MessageList() {
     }
   };
 
-  const rawThreads = (threadsQuery.data?.pages.flatMap((p) => p.threads) ?? []) as ThreadSummary[];
-  dbg("MessageList", `status=${threadsQuery.status} pages=${threadsQuery.data?.pages.length ?? 0} threads=${rawThreads.length} label=${selectedLabel} search="${searchQuery}"`);
+  const pages = threadsQuery.data?.pages;
 
   const allThreads = useMemo(() => {
-    const sorted = [...rawThreads];
+    const raw = (pages?.flatMap((p) => p.threads) ?? []) as ThreadSummary[];
+    const seen = new Set<string>();
+    let deduped = raw.filter((t) => {
+      if (seen.has(t.id)) return false;
+      seen.add(t.id);
+      return true;
+    });
+
+    // Focused/Other tab filtering — only applies to INBOX view
+    if (isInbox) {
+      if (inboxTab === "other") {
+        deduped = deduped.filter((t) => isOtherThread(t.from, t.labelIds ?? []));
+      } else {
+        // Focused: business-domain emails not categorized as promotions/social/etc.
+        deduped = deduped.filter((t) => !isOtherThread(t.from, t.labelIds ?? []));
+      }
+    }
     if (sortField === "date") {
-      sorted.sort((a, b) => {
+      deduped.sort((a, b) => {
         const ta = parseInt(a.internalDate ?? "0");
         const tb = parseInt(b.internalDate ?? "0");
         return sortDir === "desc" ? tb - ta : ta - tb;
       });
     } else {
-      sorted.sort((a, b) => {
+      deduped.sort((a, b) => {
         const sa = formatSender(a.from).toLowerCase();
         const sb = formatSender(b.from).toLowerCase();
         const cmp = sa.localeCompare(sb);
         return sortDir === "asc" ? cmp : -cmp;
       });
     }
-    return sorted;
-  }, [rawThreads, sortField, sortDir]);
+    return deduped;
+  }, [pages, sortField, sortDir, inboxTab, isInbox]);
 
-  const rowVirtualizer = useVirtualizer({
-    count: allThreads.length + (threadsQuery.hasNextPage ? 1 : 0),
-    getScrollElement: () => parentRef.current,
-    estimateSize: () => 76,
-    overscan: 10,
-    measureElement: (el) => el.getBoundingClientRect().height,
-  });
-
-  // Infinite scroll — stable refs so the effect deps never change identity.
-  const virtualItems = rowVirtualizer.getVirtualItems();
-  const lastVirtualIndex = virtualItems[virtualItems.length - 1]?.index ?? -1;
+  // Infinite scroll via scroll event on the list container
   const fetchNextPage = threadsQuery.fetchNextPage;
   const hasNextPage = threadsQuery.hasNextPage;
   const isFetchingNextPage = threadsQuery.isFetchingNextPage;
-  const threadCount = allThreads.length;
 
-  useEffect(() => {
-    if (lastVirtualIndex >= threadCount - 5 && hasNextPage && !isFetchingNextPage) {
+  const handleScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
+    const el = e.currentTarget;
+    if (hasNextPage && !isFetchingNextPage && el.scrollTop + el.clientHeight >= el.scrollHeight - 200) {
       fetchNextPage();
     }
-  }, [lastVirtualIndex, threadCount, hasNextPage, isFetchingNextPage, fetchNextPage]);
+  }, [hasNextPage, isFetchingNextPage, fetchNextPage]);
 
   // ── Keyboard navigation ──────────────────────────────────────────────────
   const trashMutation = useMutation({
@@ -126,15 +133,8 @@ export default function MessageList() {
 
   const selectedIndex = allThreads.findIndex((t) => t.id === selectedThreadId);
 
-  const virtualizerRef = useRef(rowVirtualizer);
-  virtualizerRef.current = rowVirtualizer;
-  const scrollToIndex = useCallback((idx: number) => {
-    virtualizerRef.current.scrollToIndex(idx, { align: "auto" });
-  }, []);
-
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      // Only fire when not typing in an input/textarea
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
       if (allThreads.length === 0) return;
 
@@ -142,34 +142,25 @@ export default function MessageList() {
         e.preventDefault();
         const next = selectedIndex < allThreads.length - 1 ? selectedIndex + 1 : selectedIndex;
         setSelectedThread(allThreads[next].id);
-        scrollToIndex(next);
       } else if (e.key === "ArrowUp") {
         e.preventDefault();
         const prev = selectedIndex > 0 ? selectedIndex - 1 : 0;
         setSelectedThread(allThreads[prev].id);
-        scrollToIndex(prev);
       } else if (e.key === "ArrowLeft") {
-        // Delete selected thread
         if (selectedIndex < 0) return;
         e.preventDefault();
-        const thread = allThreads[selectedIndex];
-        // Use thread id as msg id for trash (backend accepts thread id)
-        trashMutation.mutate(thread.id);
-        // Advance selection to next item
+        trashMutation.mutate(allThreads[selectedIndex].id);
         const nextIdx = selectedIndex < allThreads.length - 1 ? selectedIndex : selectedIndex - 1;
-        if (nextIdx >= 0) setSelectedThread(allThreads[nextIdx]?.id ?? null);
-        else setSelectedThread(null);
+        setSelectedThread(nextIdx >= 0 ? (allThreads[nextIdx]?.id ?? null) : null);
       } else if (e.key === "ArrowRight") {
-        // Move selected thread — open move modal
         if (selectedIndex < 0) return;
         e.preventDefault();
-        const thread = allThreads[selectedIndex];
-        setMoveModal({ threadId: thread.id, msgId: thread.id });
+        setMoveModal({ threadId: allThreads[selectedIndex].id, msgId: allThreads[selectedIndex].id });
       }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [allThreads, selectedIndex, setSelectedThread, trashMutation.mutate, scrollToIndex]);
+  }, [allThreads, selectedIndex, setSelectedThread, trashMutation.mutate]);
 
   const cycleSortDir = () => setSortDir(sortDir === "desc" ? "asc" : "desc");
 
@@ -177,9 +168,10 @@ export default function MessageList() {
     <div className="flex flex-col h-full" tabIndex={-1}>
       {/* Header */}
       <div className="px-3 py-2 border-b border-gray-100 flex-shrink-0" style={{ paddingTop: "calc(28px + 6px)" }}>
+        {/* Label title + sync */}
         <div className="flex items-center justify-between mb-2">
-          <span className="text-sm font-semibold text-gray-800 capitalize">
-            {selectedLabel.toLowerCase()}
+          <span className="text-sm font-semibold text-gray-800 capitalize flex-1">
+            {isInbox ? "Inbox" : selectedLabel.replace(/_/g, " ").toLowerCase()}
           </span>
           <button
             onClick={handleSync}
@@ -190,16 +182,45 @@ export default function MessageList() {
             <RefreshCw className={cn("w-3.5 h-3.5 text-gray-500", (syncing || threadsQuery.isFetching) && "animate-spin")} />
           </button>
         </div>
+
         <SearchBar />
 
+        {/* Focused / Other tabs — inbox only, below search */}
+        {isInbox && (
+          <div className="flex items-center gap-0 mt-3 border-b border-gray-100">
+            <button
+              onClick={() => setInboxTab("focused")}
+              className={cn(
+                "flex-1 py-2 text-[10px] font-black uppercase tracking-widest border-b-2 -mb-px transition-all",
+                inboxTab === "focused"
+                  ? "border-blue-600 text-blue-600 bg-blue-50/30"
+                  : "border-transparent text-gray-400 hover:text-gray-600"
+              )}
+            >
+              Focused
+            </button>
+            <button
+              onClick={() => setInboxTab("other")}
+              className={cn(
+                "flex-1 py-2 text-[10px] font-black uppercase tracking-widest border-b-2 -mb-px transition-all",
+                inboxTab === "other"
+                  ? "border-blue-600 text-blue-600 bg-blue-50/30"
+                  : "border-transparent text-gray-400 hover:text-gray-600"
+              )}
+            >
+              Other
+            </button>
+          </div>
+        )}
+
         {/* Sort controls */}
-        <div className="flex items-center gap-1 mt-2">
-          <span className="text-xs text-gray-400 mr-0.5">Sort:</span>
+        <div className="flex items-center gap-2 mt-3 pl-1">
+          <span className="text-[9px] font-black text-gray-300 uppercase tracking-tighter">Sort by</span>
           <button
             onClick={() => { setSortField("date"); if (sortField === "date") cycleSortDir(); }}
             className={cn(
-              "flex items-center gap-1 px-2 py-0.5 rounded text-xs transition-colors",
-              sortField === "date" ? "bg-blue-100 text-blue-700 font-medium" : "text-gray-500 hover:bg-gray-100"
+              "flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[10px] font-bold transition-all",
+              sortField === "date" ? "bg-gray-900 text-white shadow-sm" : "text-gray-500 hover:bg-gray-100"
             )}
           >
             <CalendarDays className="w-3 h-3" />
@@ -209,8 +230,8 @@ export default function MessageList() {
           <button
             onClick={() => { setSortField("sender"); if (sortField === "sender") cycleSortDir(); }}
             className={cn(
-              "flex items-center gap-1 px-2 py-0.5 rounded text-xs transition-colors",
-              sortField === "sender" ? "bg-blue-100 text-blue-700 font-medium" : "text-gray-500 hover:bg-gray-100"
+              "flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[10px] font-bold transition-all",
+              sortField === "sender" ? "bg-gray-900 text-white shadow-sm" : "text-gray-500 hover:bg-gray-100"
             )}
           >
             <User2 className="w-3 h-3" />
@@ -238,42 +259,21 @@ export default function MessageList() {
           <p className="text-xs text-gray-400">No messages</p>
         </div>
       ) : (
-        <div ref={parentRef} className="flex-1 overflow-y-auto">
-          <div style={{ height: `${rowVirtualizer.getTotalSize()}px`, position: "relative" }}>
-            {rowVirtualizer.getVirtualItems().map((virtualRow) => {
-              const thread = allThreads[virtualRow.index];
-              if (!thread) {
-                return (
-                  <div
-                    key="loader"
-                    data-index={virtualRow.index}
-                    ref={rowVirtualizer.measureElement}
-                    style={{ position: "absolute", top: virtualRow.start, width: "100%" }}
-                    className="flex items-center justify-center py-4"
-                  >
-                    <Loader2 className="w-4 h-4 animate-spin text-gray-400" />
-                  </div>
-                );
-              }
-              return (
-                <ThreadRow
-                  key={thread.id}
-                  thread={thread}
-                  isSelected={thread.id === selectedThreadId}
-                  onSelect={() => {
-                    dbg("ThreadRow.click", `id=${thread.id} idx=${virtualRow.index} top=${virtualRow.start}`);
-                    setSelectedThread(thread.id);
-                    dbg("ThreadRow.click", "setSelectedThread dispatched");
-                  }}
-                  onMouseDown={() => dbg("ThreadRow.mousedown", `id=${thread.id}`)}
-                  onMouseUp={() => dbg("ThreadRow.mouseup", `id=${thread.id}`)}
-                  virtualIndex={virtualRow.index}
-                  measureRef={rowVirtualizer.measureElement}
-                  style={{ position: "absolute", top: virtualRow.start, width: "100%" }}
-                />
-              );
-            })}
-          </div>
+        <div ref={parentRef} className="flex-1 overflow-y-auto" onScroll={handleScroll}>
+          {allThreads.map((thread) => (
+            <ThreadRow
+              key={thread.id}
+              thread={thread}
+              isSelected={thread.id === selectedThreadId}
+              onSelect={() => setSelectedThread(thread.id)}
+              onOpenPopup={() => setPopupThreadId(thread.id)}
+            />
+          ))}
+          {threadsQuery.isFetchingNextPage && (
+            <div className="flex items-center justify-center py-4">
+              <Loader2 className="w-4 h-4 animate-spin text-gray-400" />
+            </div>
+          )}
         </div>
       )}
 
@@ -288,7 +288,53 @@ export default function MessageList() {
           }}
         />
       )}
+
+      {popupThreadId && (
+        <EmailThreadPopup
+          threadId={popupThreadId}
+          onClose={() => setPopupThreadId(null)}
+        />
+      )}
     </div>
+  );
+}
+
+function EmailThreadPopup({ threadId, onClose }: { threadId: string; onClose: () => void }) {
+  const { data: messages, isLoading, error } = useQuery({
+    queryKey: ["thread", threadId],
+    queryFn: () => getThreadView(threadId),
+  });
+
+  if (isLoading) {
+    return (
+      <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/45 p-6 backdrop-blur-sm" onMouseDown={onClose}>
+        <div className="flex items-center gap-3 rounded-2xl bg-white px-5 py-4 shadow-2xl" onMouseDown={(event) => event.stopPropagation()}>
+          <Loader2 className="h-5 w-5 animate-spin text-blue-500" />
+          <span className="text-sm font-semibold text-gray-600">Opening email…</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (error || !messages?.length) {
+    return (
+      <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/45 p-6 backdrop-blur-sm" onMouseDown={onClose}>
+        <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl" onMouseDown={(event) => event.stopPropagation()}>
+          <p className="mb-2 text-sm font-bold text-red-600">Failed to open email</p>
+          <p className="break-words text-xs text-gray-500">{String(error ?? "No messages found")}</p>
+          <button onClick={onClose} className="mt-4 rounded-xl bg-gray-900 px-4 py-2 text-xs font-bold text-white">
+            Close
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <MessagePopup
+      content={{ type: "email-thread", messages, title: messages[0]?.subject || "Email Conversation" }}
+      onClose={onClose}
+    />
   );
 }
 
@@ -298,63 +344,79 @@ function ThreadRow({
   thread,
   isSelected,
   onSelect,
-  onMouseDown,
-  onMouseUp,
-  virtualIndex,
-  measureRef,
-  style,
+  onOpenPopup,
 }: {
   thread: ThreadSummary;
   isSelected: boolean;
   onSelect: () => void;
-  onMouseDown?: () => void;
-  onMouseUp?: () => void;
-  virtualIndex: number;
-  measureRef: (el: Element | null) => void;
-  style: React.CSSProperties;
+  onOpenPopup: () => void;
 }) {
   const sender = formatSender(thread.from);
   const dateStr = formatDate(thread.date, thread.internalDate);
   const subject = thread.subject || "(no subject)";
 
   return (
-    <div data-index={virtualIndex} ref={measureRef} style={style}>
+    <div>
       <button
-        style={{ width: "100%" }}
+        style={{
+          width: "100%",
+          background: isSelected ? "var(--c-overlay)" : "transparent",
+          borderBottom: "1px solid var(--c-border)",
+          boxShadow: isSelected ? "inset 3px 0 0 0 var(--c-accent)" : undefined,
+        }}
         onClick={onSelect}
-        onMouseDown={onMouseDown}
-        onMouseUp={onMouseUp}
-        className={cn(
-          "w-full text-left px-3 py-2.5 border-b border-gray-100 transition-colors hover:bg-gray-50 flex flex-col gap-0.5",
-          isSelected && "bg-blue-50 hover:bg-blue-50"
-        )}
+        onDoubleClick={(event) => {
+          event.preventDefault();
+          onOpenPopup();
+        }}
+        className="w-full text-left px-4 py-3.5 transition-all group relative"
+        onMouseEnter={e => { if (!isSelected) e.currentTarget.style.background = "var(--c-overlay)"; }}
+        onMouseLeave={e => { if (!isSelected) e.currentTarget.style.background = "transparent"; }}
       >
-        <div className="flex items-center justify-between gap-2 w-full">
-          <div className="flex items-center gap-1.5 min-w-0">
-            {thread.isUnread && <span className="w-2 h-2 rounded-full bg-blue-500 flex-shrink-0" />}
-            <span className={cn("text-sm truncate", thread.isUnread ? "font-semibold text-gray-900" : "font-medium text-gray-700")}>
+        <div className="flex items-center justify-between gap-3 w-full mb-1">
+          <div className="flex items-center gap-2 min-w-0">
+            {thread.isUnread && (
+              <div
+                className="w-2 h-2 rounded-full flex-shrink-0"
+                style={{ background: "var(--c-accent)", boxShadow: "0 0 6px color-mix(in srgb, var(--c-accent) 60%, transparent)" }}
+              />
+            )}
+            <span
+              className="text-[13px] truncate tracking-tight"
+              style={{
+                color: "var(--c-text-1)",
+                fontWeight: thread.isUnread ? 700 : 500,
+              }}
+            >
               {sender}
             </span>
             {thread.messageCount > 1 && (
-              <span className="text-xs text-gray-400 flex-shrink-0">({thread.messageCount})</span>
+              <span
+                className="text-[10px] font-semibold px-1.5 py-0.5 rounded leading-none flex-shrink-0"
+                style={{ background: "var(--c-overlay)", color: "var(--c-text-3)", border: "1px solid var(--c-border)" }}
+              >
+                {thread.messageCount}
+              </span>
             )}
           </div>
-          <div className="flex items-center gap-1 flex-shrink-0">
-            {thread.isStarred && <Star className="w-3 h-3 text-yellow-400 fill-yellow-400" />}
-            <span className="text-xs" style={{ color: "var(--mm-text-muted, #9ca3af)" }}>{dateStr}</span>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            {thread.isStarred && <Star className="w-3.5 h-3.5 text-amber-400 fill-amber-400" />}
+            <span className="text-[10px] font-medium" style={{ color: "var(--c-text-3)" }}>{dateStr}</span>
           </div>
         </div>
 
-        <p className={cn(
-          "text-xs truncate w-full",
-          thread.isUnread ? "text-gray-800 font-medium" : "text-gray-600",
-          thread.isUnread ? "pl-3.5" : "pl-0"
-        )}>
+        <p
+          className="text-[12px] truncate w-full mb-0.5"
+          style={{
+            color: thread.isUnread ? "var(--c-text-1)" : "var(--c-text-2)",
+            fontWeight: thread.isUnread ? 600 : 400,
+          }}
+        >
           {subject}
         </p>
 
         {thread.snippet && (
-          <p className="text-xs truncate w-full" style={{ color: "var(--mm-text-secondary, #6b7280)" }}>
+          <p className="text-[11px] truncate w-full font-normal leading-tight" style={{ color: "var(--c-text-3)" }}>
             {thread.snippet}
           </p>
         )}

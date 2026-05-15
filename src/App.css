@@ -2,26 +2,41 @@
 @import "./mm-themes.css";
 
 /* Prevent email HTML (tables, images, divs with fixed px widths) from
-   overflowing the detail pane and pushing the flex layout */
+   overflowing the detail pane */
 .email-body {
-  contain: layout;
-  overflow: hidden;
+  overflow-x: hidden;
   width: 100%;
   max-width: 100%;
+  word-break: break-word;
+  overflow-wrap: break-word;
 }
 .email-body * {
   max-width: 100% !important;
+  min-width: 0 !important;
   box-sizing: border-box !important;
+  word-break: break-word;
+  overflow-wrap: break-word;
 }
 .email-body table {
   width: 100% !important;
+  max-width: 100% !important;
   table-layout: fixed !important;
+}
+.email-body td,
+.email-body th {
+  max-width: 100% !important;
+  overflow-wrap: break-word;
+  word-break: break-word;
 }
 .email-body img {
   height: auto !important;
-}
-.email-body [style*="width"] {
   max-width: 100% !important;
+}
+.email-body div,
+.email-body span,
+.email-body p {
+  max-width: 100% !important;
+  overflow: hidden;
 }
 
 :root {

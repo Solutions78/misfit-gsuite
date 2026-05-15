@@ -6,7 +6,9 @@ use crate::AppState;
 #[tauri::command]
 pub async fn list_calendars(state: State<'_, AppState>) -> Result<Vec<CalendarListEntry>, String> {
     let api = state.api.read().await;
-    calendar::list_calendars(&api).await.map_err(|e| e.to_string())
+    calendar::list_calendars(&api)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -18,9 +20,15 @@ pub async fn list_events(
     max_results: Option<u32>,
 ) -> Result<Vec<CalendarEvent>, String> {
     let api = state.api.read().await;
-    calendar::list_events(&api, &calendar_id, &time_min, &time_max, max_results.unwrap_or(250))
-        .await
-        .map_err(|e| e.to_string())
+    calendar::list_events(
+        &api,
+        &calendar_id,
+        &time_min,
+        &time_max,
+        max_results.unwrap_or(250),
+    )
+    .await
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]

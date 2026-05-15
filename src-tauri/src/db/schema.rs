@@ -58,4 +58,28 @@ CREATE TABLE IF NOT EXISTS pending_operations (
     created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
     attempts INTEGER NOT NULL DEFAULT 0
 );
+
+CREATE TABLE IF NOT EXISTS hidden_chat_spaces (
+    account_email TEXT NOT NULL,
+    space_name TEXT NOT NULL,
+    hidden_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+    PRIMARY KEY (account_email, space_name)
+);
+
+CREATE TABLE IF NOT EXISTS docs_cache (
+  doc_id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  revision_id TEXT NOT NULL,
+  content_json TEXT NOT NULL,
+  fetched_at INTEGER NOT NULL,
+  modified_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS docs_drafts (
+  draft_id TEXT PRIMARY KEY,
+  doc_id TEXT NOT NULL REFERENCES docs_cache(doc_id),
+  delta_json TEXT NOT NULL,
+  saved_at INTEGER NOT NULL,
+  synced INTEGER NOT NULL DEFAULT 0
+);
 ";

@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 
@@ -24,7 +26,7 @@ pub struct CachedMessage {
 /// A flattened thread summary read from the local cache — used for the list pane.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CachedThreadSummary {
-    pub id: String,          // message id of the representative (latest) message
+    pub id: String, // message id of the representative (latest) message
     pub thread_id: String,
     pub subject: Option<String>,
     pub from_address: Option<String>,
@@ -34,6 +36,7 @@ pub struct CachedThreadSummary {
     pub is_read: bool,
     pub is_starred: bool,
     pub message_count: i64,
+    pub label_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -100,19 +103,37 @@ pub fn list_cached_thread_summaries(
             m.internal_date,
             m.is_read,
             m.is_starred,
-            (SELECT COUNT(*) FROM messages mc WHERE mc.thread_id = m.thread_id) AS message_count
+            (SELECT COUNT(*) FROM messages mc WHERE mc.thread_id = m.thread_id) AS message_count,
+            m.label_ids
          FROM messages m
          INNER JOIN (
-             SELECT thread_id, MAX(internal_date) AS max_date
-             FROM messages
-             WHERE label_ids LIKE '%' || ?1 || '%'
-             GROUP BY thread_id
-         ) latest ON m.thread_id = latest.thread_id AND m.internal_date = latest.max_date
+             -- One representative id per thread. Uses ROW_NUMBER() window function
+             -- (available since SQLite 3.25) to rank rows within each thread by:
+             --   1. internal_date DESC (most recent first)
+             --   2. from_address IS NOT NULL DESC (rows with sender preferred)
+             --   3. id DESC (deterministic tie-break)
+             -- Only the rank-1 row is kept, guaranteeing exactly one row per thread.
+             SELECT id AS rep_id
+             FROM (
+                 SELECT id,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY thread_id
+                            ORDER BY COALESCE(internal_date, 0) DESC,
+                                     CASE WHEN from_address IS NOT NULL THEN 1 ELSE 0 END DESC,
+                                     id DESC
+                        ) AS rn
+                 FROM messages
+                 WHERE label_ids LIKE '%' || ?1 || '%'
+             )
+             WHERE rn = 1
+         ) rep ON m.id = rep.rep_id
          ORDER BY m.internal_date DESC
          LIMIT ?2 OFFSET ?3",
     )?;
 
     let rows = stmt.query_map(params![label_id, limit, offset], |row| {
+        let label_ids_json: String = row.get(10).unwrap_or_default();
+        let label_ids: Vec<String> = serde_json::from_str(&label_ids_json).unwrap_or_default();
         Ok(CachedThreadSummary {
             id: row.get(0)?,
             thread_id: row.get(1)?,
@@ -124,6 +145,7 @@ pub fn list_cached_thread_summaries(
             is_read: row.get::<_, i32>(7)? != 0,
             is_starred: row.get::<_, i32>(8)? != 0,
             message_count: row.get(9)?,
+            label_ids,
         })
     })?;
 
@@ -152,19 +174,31 @@ pub fn search_cached_threads(
             m.internal_date,
             m.is_read,
             m.is_starred,
-            (SELECT COUNT(*) FROM messages mc WHERE mc.thread_id = m.thread_id) AS message_count
+            (SELECT COUNT(*) FROM messages mc WHERE mc.thread_id = m.thread_id) AS message_count,
+            m.label_ids
          FROM messages m
          INNER JOIN (
-             SELECT thread_id, MAX(internal_date) AS max_date
-             FROM messages
-             WHERE subject LIKE ?1 OR from_address LIKE ?1 OR snippet LIKE ?1
-             GROUP BY thread_id
-         ) latest ON m.thread_id = latest.thread_id AND m.internal_date = latest.max_date
+             SELECT id AS rep_id
+             FROM (
+                 SELECT id,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY thread_id
+                            ORDER BY COALESCE(internal_date, 0) DESC,
+                                     CASE WHEN from_address IS NOT NULL THEN 1 ELSE 0 END DESC,
+                                     id DESC
+                        ) AS rn
+                 FROM messages
+                 WHERE subject LIKE ?1 OR from_address LIKE ?1 OR snippet LIKE ?1
+             )
+             WHERE rn = 1
+         ) rep ON m.id = rep.rep_id
          ORDER BY m.internal_date DESC
          LIMIT ?2",
     )?;
 
     let rows = stmt.query_map(params![pattern, limit], |row| {
+        let label_ids_json: String = row.get(10).unwrap_or_default();
+        let label_ids: Vec<String> = serde_json::from_str(&label_ids_json).unwrap_or_default();
         Ok(CachedThreadSummary {
             id: row.get(0)?,
             thread_id: row.get(1)?,
@@ -176,6 +210,7 @@ pub fn search_cached_threads(
             is_read: row.get::<_, i32>(7)? != 0,
             is_starred: row.get::<_, i32>(8)? != 0,
             message_count: row.get(9)?,
+            label_ids,
         })
     })?;
 
@@ -219,11 +254,13 @@ pub fn apply_local_label_change(
     remove_labels: &[String],
 ) -> Result<(), AppError> {
     // Read current label_ids JSON
-    let label_ids_json: String = conn.query_row(
-        "SELECT label_ids FROM messages WHERE id = ?1",
-        params![msg_id],
-        |row| row.get(0),
-    ).unwrap_or_else(|_| "[]".to_string());
+    let label_ids_json: String = conn
+        .query_row(
+            "SELECT label_ids FROM messages WHERE id = ?1",
+            params![msg_id],
+            |row| row.get(0),
+        )
+        .unwrap_or_else(|_| "[]".to_string());
 
     let mut labels: Vec<String> = serde_json::from_str(&label_ids_json).unwrap_or_default();
 
@@ -258,9 +295,8 @@ pub fn enqueue_op(conn: &Connection, op_type: &str, payload: &str) -> Result<i64
 }
 
 pub fn list_pending_ops(conn: &Connection) -> Result<Vec<PendingOp>, AppError> {
-    let mut stmt = conn.prepare(
-        "SELECT id, op_type, payload, attempts FROM pending_operations ORDER BY id ASC",
-    )?;
+    let mut stmt = conn
+        .prepare("SELECT id, op_type, payload, attempts FROM pending_operations ORDER BY id ASC")?;
     let rows = stmt.query_map([], |row| {
         Ok(PendingOp {
             id: row.get(0)?,
@@ -313,7 +349,19 @@ pub fn update_sync_state(conn: &Connection, email: &str, history_id: &str) -> Re
     Ok(())
 }
 
-pub fn update_watch_expiration(conn: &Connection, email: &str, expiration: i64) -> Result<(), AppError> {
+pub fn clear_sync_state(conn: &Connection, email: &str) -> Result<(), AppError> {
+    conn.execute(
+        "DELETE FROM sync_state WHERE account_email = ?1",
+        params![email],
+    )?;
+    Ok(())
+}
+
+pub fn update_watch_expiration(
+    conn: &Connection,
+    email: &str,
+    expiration: i64,
+) -> Result<(), AppError> {
     conn.execute(
         "UPDATE sync_state SET watch_expiration = ?1 WHERE account_email = ?2",
         params![expiration, email],
@@ -336,7 +384,12 @@ pub fn get_watch_expiration(conn: &Connection, email: &str) -> Result<Option<i64
 
 // ── Accounts ───────────────────────────────────────────────────────────────
 
-pub fn upsert_account(conn: &Connection, email: &str, display_name: &str, picture_url: Option<&str>) -> Result<(), AppError> {
+pub fn upsert_account(
+    conn: &Connection,
+    email: &str,
+    display_name: &str,
+    picture_url: Option<&str>,
+) -> Result<(), AppError> {
     conn.execute(
         "INSERT OR REPLACE INTO accounts (email, display_name, picture_url, added_at)
          VALUES (?1, ?2, ?3, strftime('%s','now'))",
@@ -346,9 +399,8 @@ pub fn upsert_account(conn: &Connection, email: &str, display_name: &str, pictur
 }
 
 pub fn list_accounts(conn: &Connection) -> Result<Vec<(String, String, Option<String>)>, AppError> {
-    let mut stmt = conn.prepare(
-        "SELECT email, display_name, picture_url FROM accounts ORDER BY added_at"
-    )?;
+    let mut stmt =
+        conn.prepare("SELECT email, display_name, picture_url FROM accounts ORDER BY added_at")?;
     let rows = stmt.query_map([], |row| {
         Ok((
             row.get::<_, String>(0)?,
@@ -359,6 +411,37 @@ pub fn list_accounts(conn: &Connection) -> Result<Vec<(String, String, Option<St
     let mut results = Vec::new();
     for row in rows {
         results.push(row.map_err(AppError::Database)?);
+    }
+    Ok(results)
+}
+
+pub fn delete_account(conn: &Connection, email: &str) -> Result<(), AppError> {
+    conn.execute("DELETE FROM accounts WHERE email = ?1", params![email])?;
+    Ok(())
+}
+
+// ── Local Chat visibility ─────────────────────────────────────────────────
+
+pub fn hide_chat_space(conn: &Connection, email: &str, space_name: &str) -> Result<(), AppError> {
+    conn.execute(
+        "INSERT OR REPLACE INTO hidden_chat_spaces (account_email, space_name, hidden_at)
+         VALUES (?1, ?2, strftime('%s','now'))",
+        params![email, space_name],
+    )?;
+    Ok(())
+}
+
+pub fn list_hidden_chat_spaces(
+    conn: &Connection,
+    email: &str,
+) -> Result<HashSet<String>, AppError> {
+    let mut stmt =
+        conn.prepare("SELECT space_name FROM hidden_chat_spaces WHERE account_email = ?1")?;
+    let rows = stmt.query_map(params![email], |row| row.get::<_, String>(0))?;
+
+    let mut results = HashSet::new();
+    for row in rows {
+        results.insert(row.map_err(AppError::Database)?);
     }
     Ok(results)
 }
@@ -380,8 +463,7 @@ pub fn get_messages_for_thread(
 
     let rows = stmt.query_map(params![thread_id], |row| {
         let label_ids_json: String = row.get(7)?;
-        let label_ids: Vec<String> =
-            serde_json::from_str(&label_ids_json).unwrap_or_default();
+        let label_ids: Vec<String> = serde_json::from_str(&label_ids_json).unwrap_or_default();
         Ok(CachedMessage {
             id: row.get(0)?,
             thread_id: row.get(1)?,
@@ -403,4 +485,120 @@ pub fn get_messages_for_thread(
         results.push(row.map_err(AppError::Database)?);
     }
     Ok(results)
+}
+
+// ── Docs cache ─────────────────────────────────────────────────────────────
+
+pub fn upsert_doc_cache(
+    conn: &Connection,
+    doc_id: &str,
+    title: &str,
+    revision_id: &str,
+    content_json: &str,
+) -> Result<(), AppError> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+
+    conn.execute(
+        "INSERT OR REPLACE INTO docs_cache (doc_id, title, revision_id, content_json, fetched_at, modified_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
+        params![doc_id, title, revision_id, content_json, now],
+    )
+    .map_err(AppError::Database)?;
+
+    Ok(())
+}
+
+pub fn get_doc_cache(
+    conn: &Connection,
+    doc_id: &str,
+) -> Result<Option<(String, String, String, i64)>, AppError> {
+    let mut stmt = conn.prepare(
+        "SELECT title, revision_id, content_json, fetched_at FROM docs_cache WHERE doc_id = ?1",
+    )
+    .map_err(AppError::Database)?;
+
+    let mut rows = stmt
+        .query_map(params![doc_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, i64>(3)?,
+            ))
+        })
+        .map_err(AppError::Database)?;
+
+    if let Some(row) = rows.next() {
+        Ok(Some(row.map_err(AppError::Database)?))
+    } else {
+        Ok(None)
+    }
+}
+
+pub fn save_doc_draft(
+    conn: &Connection,
+    doc_id: &str,
+    delta_json: &str,
+) -> Result<String, AppError> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+
+    conn.execute(
+        "INSERT INTO docs_drafts (draft_id, doc_id, delta_json, saved_at, synced)
+         VALUES (hex(randomblob(8)), ?1, ?2, ?3, 0)",
+        params![doc_id, delta_json, now],
+    )
+    .map_err(AppError::Database)?;
+
+    // Retrieve the generated draft_id
+    let draft_id: String = conn
+        .query_row(
+            "SELECT draft_id FROM docs_drafts WHERE rowid = last_insert_rowid()",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(AppError::Database)?;
+
+    Ok(draft_id)
+}
+
+pub fn list_unsynced_drafts(
+    conn: &Connection,
+) -> Result<Vec<(String, String, String)>, AppError> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT draft_id, doc_id, delta_json FROM docs_drafts WHERE synced = 0 ORDER BY saved_at ASC",
+        )
+        .map_err(AppError::Database)?;
+
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })
+        .map_err(AppError::Database)?;
+
+    let mut results = Vec::new();
+    for row in rows {
+        results.push(row.map_err(AppError::Database)?);
+    }
+    Ok(results)
+}
+
+pub fn mark_draft_synced(conn: &Connection, draft_id: &str) -> Result<(), AppError> {
+    conn.execute(
+        "UPDATE docs_drafts SET synced = 1 WHERE draft_id = ?1",
+        params![draft_id],
+    )
+    .map_err(AppError::Database)?;
+
+    Ok(())
 }

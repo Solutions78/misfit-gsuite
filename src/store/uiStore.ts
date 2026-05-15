@@ -1,11 +1,11 @@
 import { create } from "zustand";
-import { dbg } from "@/lib/debugLog";
 
-type ActiveView = "mail" | "calendar";
+type ActiveView = "mail" | "calendar" | "drive" | "docs" | "sheets" | "slides" | "cloud" | "admin" | "chat-test";
 type ComposeMode = "new" | "reply" | "forward" | null;
 export type SortField = "date" | "sender";
 export type SortDir = "asc" | "desc";
 export type MailLayout = "side" | "top";
+export type InboxTab = "focused" | "other";
 export type ThemeKey =
   | "mm-cool-dark" | "mm-cool-light"
   | "mm-neutral-dark" | "mm-neutral-light"
@@ -36,10 +36,15 @@ interface UIStore {
   sidebarWidth: number;
   chatPanelWidth: number;
   mailLayout: MailLayout;
+  inboxTab: InboxTab;
   theme: ThemeKey;
   themePanelOpen: boolean;
+  eventModalOpen: boolean;
+  eventModalData: { event: any; initialDate: Date | null } | null;
+  activeCalendarSubscriptions: boolean;
 
   setActiveView: (view: ActiveView) => void;
+  setInboxTab: (tab: InboxTab) => void;
   setSelectedThread: (id: string | null) => void;
   setSelectedLabel: (label: string) => void;
   setChatPanelOpen: (open: boolean) => void;
@@ -58,6 +63,9 @@ interface UIStore {
   setMailLayout: (layout: MailLayout) => void;
   setTheme: (theme: ThemeKey) => void;
   setThemePanelOpen: (open: boolean) => void;
+  openEventModal: (event?: any, initialDate?: Date) => void;
+  closeEventModal: () => void;
+  toggleCalendarSubscriptions: () => void;
 }
 
 export const useUIStore = create<UIStore>((set) => ({
@@ -75,17 +83,18 @@ export const useUIStore = create<UIStore>((set) => ({
   sidebarWidth: 220,
   chatPanelWidth: 280,
   mailLayout: "side",
+  inboxTab: "focused",
   themePanelOpen: false,
+  eventModalOpen: false,
+  eventModalData: null,
+  activeCalendarSubscriptions: false,
   theme: (() => {
     const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
     return prefersDark ? "mm-neutral-dark" : "mm-neutral-light";
   })(),
 
   setActiveView: (activeView) => set({ activeView }),
-  setSelectedThread: (selectedThreadId) => {
-    dbg("uiStore.setSelectedThread", `→ ${selectedThreadId}`, new Error().stack?.split("\n").slice(1, 4).join(" | "));
-    set({ selectedThreadId });
-  },
+  setSelectedThread: (selectedThreadId) => set({ selectedThreadId }),
   setSelectedLabel: (selectedLabel) => set({ selectedLabel, selectedThreadId: null }),
   setChatPanelOpen: (chatPanelOpen) => set({ chatPanelOpen }),
   toggleChatPanel: () => set((s) => ({ chatPanelOpen: !s.chatPanelOpen })),
@@ -102,6 +111,10 @@ export const useUIStore = create<UIStore>((set) => ({
   setSidebarWidth: (sidebarWidth) => set({ sidebarWidth }),
   setChatPanelWidth: (chatPanelWidth) => set({ chatPanelWidth }),
   setMailLayout: (mailLayout) => set({ mailLayout }),
+  setInboxTab: (inboxTab) => set({ inboxTab, selectedThreadId: null }),
   setTheme: (theme) => set({ theme }),
   setThemePanelOpen: (themePanelOpen) => set({ themePanelOpen }),
+  openEventModal: (event, initialDate) => set({ eventModalOpen: true, eventModalData: { event, initialDate: initialDate ?? null } }),
+  closeEventModal: () => set({ eventModalOpen: false, eventModalData: null }),
+  toggleCalendarSubscriptions: () => set((s) => ({ activeCalendarSubscriptions: !s.activeCalendarSubscriptions })),
 }));

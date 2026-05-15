@@ -1,8 +1,8 @@
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 
-use crate::auth::{keychain, oauth, OAuthState, TokenSet};
+use crate::auth::{oauth, OAuthState, TokenSet};
 use crate::error::AppError;
 
 pub struct ApiClient {
@@ -10,6 +10,7 @@ pub struct ApiClient {
     pub oauth_state: Arc<RwLock<OAuthState>>,
     pub client_id: String,
     pub client_secret: String,
+    pub refresh_lock: Mutex<()>,
 }
 
 impl ApiClient {
@@ -24,14 +25,47 @@ impl ApiClient {
             oauth_state: Arc::new(RwLock::new(OAuthState::new())),
             client_id,
             client_secret,
+            refresh_lock: Mutex::new(()),
         }
     }
 
     /// Get a valid access token for the current account, refreshing if needed.
     pub async fn access_token(&self) -> Result<String, AppError> {
+        // Fast path: token is valid
+        {
+            let state = self.oauth_state.read().await;
+            let token = state.current_token().ok_or(AppError::NotAuthenticated)?;
+            let missing_scopes = token.missing_required_scopes();
+            if !missing_scopes.is_empty() {
+                return Err(AppError::Auth(format!(
+                    "Stored Google token is missing required scopes. Sign in again to grant: {}",
+                    missing_scopes.join(", ")
+                )));
+            }
+            if !token.is_expired() {
+                return Ok(token.access_token.clone());
+            }
+        }
+
+        // Slow path: token is expired, need to refresh.
+        // Use a lock to ensure only one thread performs the refresh.
+        let _guard = self.refresh_lock.lock().await;
+
+        // Check again: another thread might have refreshed it while we waited for the lock.
         let state = self.oauth_state.read().await;
-        let token = state.current_token().ok_or(AppError::NotAuthenticated)?.clone();
+        let token = state
+            .current_token()
+            .ok_or(AppError::NotAuthenticated)?
+            .clone();
         drop(state);
+
+        let missing_scopes = token.missing_required_scopes();
+        if !missing_scopes.is_empty() {
+            return Err(AppError::Auth(format!(
+                "Stored Google token is missing required scopes. Sign in again to grant: {}",
+                missing_scopes.join(", ")
+            )));
+        }
 
         if token.is_expired() {
             self.refresh_current_token(&token).await
@@ -49,18 +83,22 @@ impl ApiClient {
         )
         .await?;
 
-        let new_token = oauth::token_response_to_set(
+        let mut new_token = oauth::token_response_to_set(
             resp,
             Some(token.refresh_token.clone()),
             oauth::UserInfo {
+                sub: Some(token.google_user_id.clone()),
                 email: token.email.clone(),
                 name: Some(token.display_name.clone()),
                 picture: token.picture_url.clone(),
             },
         );
 
+        if new_token.scopes.is_empty() {
+            new_token.scopes = token.scopes.clone();
+        }
+
         let access = new_token.access_token.clone();
-        keychain::store_token(&new_token)?;
 
         let mut state = self.oauth_state.write().await;
         state.add_or_update(new_token);
@@ -71,10 +109,8 @@ impl ApiClient {
     /// Make an authorized GET request with exponential backoff on 429/503.
     pub async fn get(&self, url: &str) -> Result<reqwest::Response, AppError> {
         let token = self.access_token().await?;
-        self.with_backoff(|| {
-            self.http.get(url).bearer_auth(&token).send()
-        })
-        .await
+        self.with_backoff(|| self.http.get(url).bearer_auth(&token).send())
+            .await
     }
 
     /// Make an authorized POST request with exponential backoff.
@@ -84,10 +120,8 @@ impl ApiClient {
         body: &T,
     ) -> Result<reqwest::Response, AppError> {
         let token = self.access_token().await?;
-        self.with_backoff(|| {
-            self.http.post(url).bearer_auth(&token).json(body).send()
-        })
-        .await
+        self.with_backoff(|| self.http.post(url).bearer_auth(&token).json(body).send())
+            .await
     }
 
     /// Make an authorized PUT request.
@@ -97,19 +131,15 @@ impl ApiClient {
         body: &T,
     ) -> Result<reqwest::Response, AppError> {
         let token = self.access_token().await?;
-        self.with_backoff(|| {
-            self.http.put(url).bearer_auth(&token).json(body).send()
-        })
-        .await
+        self.with_backoff(|| self.http.put(url).bearer_auth(&token).json(body).send())
+            .await
     }
 
     /// Make an authorized DELETE request.
     pub async fn delete(&self, url: &str) -> Result<reqwest::Response, AppError> {
         let token = self.access_token().await?;
-        self.with_backoff(|| {
-            self.http.delete(url).bearer_auth(&token).send()
-        })
-        .await
+        self.with_backoff(|| self.http.delete(url).bearer_auth(&token).send())
+            .await
     }
 
     async fn with_backoff<F, Fut>(&self, f: F) -> Result<reqwest::Response, AppError>
@@ -131,7 +161,10 @@ impl ApiClient {
             if !status.is_success() {
                 let code = status.as_u16();
                 let message = resp.text().await.unwrap_or_default();
-                return Err(AppError::Api { status: code, message });
+                return Err(AppError::Api {
+                    status: code,
+                    message,
+                });
             }
             return Ok(resp);
         }

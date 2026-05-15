@@ -5,9 +5,9 @@ mod commands;
 mod db;
 mod error;
 
-use tokio::sync::{Mutex, RwLock};
 use rusqlite::Connection;
 use tauri::{Emitter, Manager};
+use tokio::sync::{Mutex, RwLock};
 
 use crate::api::client::ApiClient;
 
@@ -16,6 +16,7 @@ pub struct AppState {
     pub db: Mutex<Connection>,
     pub client_id: String,
     pub client_secret: String,
+    pub sync_lock: Mutex<()>,
 }
 
 // Safety: rusqlite::Connection is Send. We guard it with Mutex<> ensuring
@@ -24,8 +25,10 @@ unsafe impl Sync for AppState {}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let client_id = std::env::var("GOOGLE_CLIENT_ID")
-        .unwrap_or_else(|_| "YOUR_CLIENT_ID_HERE".to_string());
+    dotenvy::dotenv().ok();
+
+    let client_id =
+        std::env::var("GOOGLE_CLIENT_ID").unwrap_or_else(|_| "YOUR_CLIENT_ID_HERE".to_string());
     let client_secret = std::env::var("GOOGLE_CLIENT_SECRET")
         .unwrap_or_else(|_| "YOUR_CLIENT_SECRET_HERE".to_string());
 
@@ -53,11 +56,13 @@ pub fn run() {
             db: Mutex::new(conn),
             client_id: client_id.clone(),
             client_secret: client_secret.clone(),
+            sync_lock: Mutex::new(()),
         })
         .setup(|app| {
             let handle = app.handle().clone();
 
-            // Restore tokens for previously logged-in accounts from keychain
+            // Restore tokens for previously logged-in accounts from keychain,
+            // then start background periodic sync.
             tauri::async_runtime::spawn(async move {
                 let state = handle.state::<AppState>();
                 let emails = {
@@ -69,16 +74,79 @@ pub fn run() {
                         .collect::<Vec<_>>()
                 };
 
+                let mut restored_emails = Vec::new();
+                let mut stale_emails = Vec::new();
+
                 for email in &emails {
-                    if let Ok(Some(token)) = crate::auth::keychain::load_token(email) {
-                        let api = state.api.read().await;
-                        api.oauth_state.write().await.add_or_update(token);
+                    match crate::auth::keychain::load_token(email) {
+                        Ok(Some(token)) if token.has_required_scopes() => {
+                            let api = state.api.read().await;
+                            api.oauth_state.write().await.add_or_update(token);
+                            restored_emails.push(email.clone());
+                        }
+                        Ok(Some(_)) | Ok(None) => {
+                            // Stored account is no longer usable (usually missing newly added
+                            // OAuth scopes). Clear it so the frontend shows the login screen
+                            // instead of waiting forever on a token that cannot be restored.
+                            let _ = crate::auth::keychain::delete_token(email);
+                            stale_emails.push(email.clone());
+                        }
+                        Err(err) => {
+                            eprintln!("Failed to restore token for {}: {}", email, err);
+                            let _ = handle.emit("auth::restore_failed", email);
+                        }
                     }
                 }
 
-                if !emails.is_empty() {
-                    let _ = handle.emit("auth::restored", &emails[0]);
+                if !stale_emails.is_empty() {
+                    let db_guard = state.db.lock().await;
+                    for email in &stale_emails {
+                        let _ = crate::db::queries::delete_account(&db_guard, email);
+                        let _ = handle.emit("auth::signed_out", email);
+                    }
                 }
+
+                if let Some(email) = restored_emails.first() {
+                    let _ = handle.emit("auth::restored", email);
+                }
+
+                // Periodic sync: every 30 seconds, call sync_inbox via the state handle
+                let sync_handle = handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(30));
+                    interval.tick().await; // skip first immediate tick — frontend does initial sync
+                    loop {
+                        interval.tick().await;
+                        let state = sync_handle.state::<AppState>();
+                        let email = {
+                            let api = state.api.read().await;
+                            let oauth = api.oauth_state.read().await;
+                            oauth
+                                .current_token()
+                                .map(|t| t.email.clone())
+                                .unwrap_or_default()
+                        };
+                        if email.is_empty() {
+                            continue;
+                        }
+
+                        // Refresh token if needed
+                        {
+                            let api = state.api.read().await;
+                            let _ = api.access_token().await;
+                        }
+
+                        // Run incremental sync
+                        if let Err(e) = crate::commands::gmail_commands::sync_inbox_internal(
+                            &state,
+                            &sync_handle,
+                        )
+                        .await
+                        {
+                            eprintln!("Background sync error: {}", e);
+                        }
+                    }
+                });
             });
 
             Ok(())
@@ -95,6 +163,8 @@ pub fn run() {
             commands::gmail_commands::list_thread_summaries,
             commands::gmail_commands::search_thread_summaries,
             commands::gmail_commands::get_thread,
+            commands::gmail_commands::get_email_view,
+            commands::gmail_commands::get_thread_view,
             commands::gmail_commands::get_message,
             commands::gmail_commands::search_threads,
             commands::gmail_commands::send_message,
@@ -110,6 +180,17 @@ pub fn run() {
             commands::gmail_commands::setup_gmail_watch,
             commands::gmail_commands::sync_inbox,
             commands::gmail_commands::drain_pending_ops,
+            // Drive
+            commands::drive_commands::list_drive_files,
+            commands::drive_commands::list_shared_drives,
+            commands::drive_commands::open_drive_file,
+            commands::drive_commands::create_drive_folder,
+            commands::drive_commands::delete_drive_file,
+            // Docs
+            commands::docs_commands::get_document,
+            commands::docs_commands::save_document,
+            commands::docs_commands::create_document,
+            commands::gemini_docs_commands::gemini_chat_with_search,
             // Calendar
             commands::calendar_commands::list_calendars,
             commands::calendar_commands::list_events,
@@ -119,8 +200,13 @@ pub fn run() {
             commands::calendar_commands::respond_to_event,
             // Chat
             commands::chat_commands::list_spaces,
+            commands::chat_commands::list_space_members,
+            commands::chat_commands::setup_chat_space,
+            commands::chat_commands::upload_chat_attachment,
             commands::chat_commands::list_chat_messages,
             commands::chat_commands::send_chat_message,
+            commands::chat_commands::search_chat_contacts,
+            commands::chat_commands::delete_chat_space,
             // Gemini
             commands::gemini_commands::gemini_chat,
             commands::gemini_commands::generate_email_reply,

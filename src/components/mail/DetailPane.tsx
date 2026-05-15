@@ -1,7 +1,5 @@
-import { useRef, useEffect } from "react";
 import { useUIStore } from "@/store/uiStore";
 import MessageDetail from "./MessageDetail";
-import { dbg } from "@/lib/debugLog";
 
 function EmptyState() {
   return (
@@ -22,20 +20,10 @@ function EmptyState() {
 // Isolated component so that selectedThreadId changes only re-render this
 // subtree — not MailView and its flex layout.
 export default function DetailPane() {
-  const renderCount = useRef(0);
-  renderCount.current += 1;
   const selectedThreadId = useUIStore((s) => s.selectedThreadId);
-  const paneRef = useRef<HTMLDivElement>(null);
-  dbg("DetailPane", `render #${renderCount.current} selectedThreadId=${selectedThreadId}`);
-  // Log actual DOM width after render
-  useEffect(() => {
-    const el = paneRef.current;
-    if (!el) return;
-    dbg("DetailPane.size", `offsetWidth=${el.offsetWidth} offsetHeight=${el.offsetHeight} parent.offsetWidth=${el.parentElement?.offsetWidth}`);
-  });
 
   return (
-    <div ref={paneRef} className="h-full w-full overflow-hidden">
+    <div className="h-full w-full overflow-hidden">
       {selectedThreadId
         ? <MessageDetail key={selectedThreadId} threadId={selectedThreadId} />
         : <EmptyState />}

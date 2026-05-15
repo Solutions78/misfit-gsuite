@@ -98,18 +98,17 @@ pub async fn generate_email_reply(
         .collect::<Vec<_>>()
         .join("\n---\n");
 
-    let instruction = instructions.unwrap_or_else(|| "Write a professional reply to this email thread.".to_string());
+    let instruction = instructions
+        .unwrap_or_else(|| "Write a professional reply to this email thread.".to_string());
     let system = build_system_prompt(&name, &email);
 
-    let messages = vec![
-        GeminiMessage {
-            role: "user".to_string(),
-            text: format!(
-                "Email thread:\n{}\n\nInstruction: {}\n\nWrite only the email body, no subject line.",
-                context, instruction
-            ),
-        }
-    ];
+    let messages = vec![GeminiMessage {
+        role: "user".to_string(),
+        text: format!(
+            "Email thread:\n{}\n\nInstruction: {}\n\nWrite only the email body, no subject line.",
+            context, instruction
+        ),
+    }];
 
     gemini::generate(&api, messages, Some(system), Some(0.6))
         .await
@@ -218,13 +217,18 @@ pub async fn generate_daily_report(state: State<'_, AppState>) -> Result<String,
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 fn extract_header(msg: &crate::api::gmail::GmailMessage, name: &str) -> Option<String> {
-    msg.payload.as_ref()?.headers.as_ref()?.iter().find_map(|h| {
-        if h.name.eq_ignore_ascii_case(name) {
-            Some(h.value.clone())
-        } else {
-            None
-        }
-    })
+    msg.payload
+        .as_ref()?
+        .headers
+        .as_ref()?
+        .iter()
+        .find_map(|h| {
+            if h.name.eq_ignore_ascii_case(name) {
+                Some(h.value.clone())
+            } else {
+                None
+            }
+        })
 }
 
 fn extract_body_text(msg: &crate::api::gmail::GmailMessage) -> String {
@@ -252,9 +256,9 @@ fn extract_part_text(part: &crate::api::gmail::MessagePart) -> String {
 
     if let Some(parts) = &part.parts {
         // Prefer text/plain, fall back to first available
-        let plain = parts.iter().find(|p| {
-            p.mime_type.as_deref() == Some("text/plain")
-        });
+        let plain = parts
+            .iter()
+            .find(|p| p.mime_type.as_deref() == Some("text/plain"));
         if let Some(p) = plain {
             let text = extract_part_text(p);
             if !text.is_empty() {

@@ -47,7 +47,13 @@ pub struct GeminiResponse {
 
 impl GeminiResponse {
     pub fn text(&self) -> Option<String> {
-        self.candidates.as_ref()?.first()?.content.parts.first().map(|p| p.text.clone())
+        self.candidates
+            .as_ref()?
+            .first()?
+            .content
+            .parts
+            .first()
+            .map(|p| p.text.clone())
     }
 }
 
@@ -98,5 +104,6 @@ pub async fn generate(
         .json::<GeminiResponse>()
         .await?;
 
-    resp.text().ok_or_else(|| AppError::Other("Gemini returned no text".to_string()))
+    resp.text()
+        .ok_or_else(|| AppError::Other("Gemini returned no text".to_string()))
 }

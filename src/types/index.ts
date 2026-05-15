@@ -8,6 +8,27 @@ export interface AccountInfo {
 
 // ── Gmail ─────────────────────────────────────────────────────────────────
 
+export interface EmailView {
+  id: string;
+  threadId: string;
+  from: string;
+  to: string;
+  subject: string;
+  date: string;
+  bodyHtml: string;
+  snippet: string;
+  labelIds: string[];
+  attachments: EmailAttachment[];
+  cidMap: Record<string, string>;
+}
+
+export interface EmailAttachment {
+  id?: string;
+  filename: string;
+  mimeType: string;
+  size: number;
+}
+
 export interface GmailMessageHeader {
   name: string;
   value: string;
@@ -59,6 +80,7 @@ export interface ThreadSummary {
   isUnread: boolean;
   isStarred: boolean;
   messageCount: number;
+  labelIds: string[];
 }
 
 export interface ThreadSummaryPage {
@@ -75,7 +97,8 @@ export interface GmailThread {
 export interface GmailLabel {
   id: string;
   name: string;
-  labelType?: string;
+  type?: string;          // "system" | "user" — matches Rust serde rename
+  labelType?: string;     // kept for backwards compat
   messagesTotal?: number;
   messagesUnread?: number;
   threadsTotal?: number;
@@ -87,35 +110,55 @@ export interface SentMessage {
   threadId: string;
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────
+// ── Drive ──────────────────────────────────────────────────────────────────
 
-export function extractHeader(msg: GmailMessage, name: string): string {
-  return (
-    msg.payload?.headers?.find(
-      (h) => h.name.toLowerCase() === name.toLowerCase()
-    )?.value ?? ""
-  );
+export interface DriveFile {
+  id: string;
+  name: string;
+  mimeType: string;
+  modifiedTime?: string;
+  size?: string;
+  iconLink?: string;
+  thumbnailLink?: string;
+  webViewLink?: string;
+  parents?: string[];
+  driveId?: string;
+  shared?: boolean;
 }
 
-export function extractBodyHtml(msg: GmailMessage): string {
-  const payload = msg.payload;
-  if (!payload) return "";
-  return findPartByMime(payload, "text/html") ?? findPartByMime(payload, "text/plain") ?? "";
+export interface DriveFileListResponse {
+  files: DriveFile[];
+  nextPageToken?: string;
 }
 
-function findPartByMime(part: GmailMessagePart, mime: string): string | null {
-  if (part.mimeType === mime && part.body?.data) {
-    try {
-      return atob(part.body.data.replace(/-/g, "+").replace(/_/g, "/"));
-    } catch {
-      return null;
-    }
-  }
-  for (const sub of part.parts ?? []) {
-    const found = findPartByMime(sub, mime);
-    if (found) return found;
-  }
-  return null;
+export interface SharedDrive {
+  id: string;
+  name: string;
+}
+
+export interface SharedDriveListResponse {
+  drives: SharedDrive[];
+  nextPageToken?: string;
+}
+
+export interface DocContent {
+  docId: string;
+  title: string;
+  revisionId: string;
+  bodyJson: string;
+}
+
+// Google Docs StructuralElement (subset needed for rendering)
+export interface DocsElement {
+  paragraph?: {
+    elements: Array<{ textRun?: { content: string; textStyle?: Record<string, unknown> } }>;
+    paragraphStyle?: { namedStyleType?: string; alignment?: string };
+    bullet?: { listId: string; nestingLevel?: number };
+  };
+  table?: { rows: unknown[] };
+  sectionBreak?: unknown;
+  startIndex?: number;
+  endIndex?: number;
 }
 
 // ── Calendar ──────────────────────────────────────────────────────────────
@@ -173,10 +216,36 @@ export interface NewEvent {
 
 // ── Chat ──────────────────────────────────────────────────────────────────
 
+export interface User {
+  name?: string;
+  displayName?: string;
+  type?: string;
+}
+
+export interface Membership {
+  name: string;
+  state?: string;
+  role?: string;
+  member?: User;
+}
+
+export interface SetUpSpaceRequest {
+  space: Space;
+  memberships?: Membership[];
+}
+
 export interface Space {
   name: string;
   displayName?: string;
   spaceType?: string;
+  singleUserBotDm?: boolean;
+}
+
+export interface ContactSuggestion {
+  resourceName?: string;
+  displayName: string;
+  email: string;
+  photoUrl?: string;
 }
 
 export interface ChatThread {
@@ -184,20 +253,33 @@ export interface ChatThread {
   threadKey?: string;
 }
 
+export interface Attachment {
+  name?: string;
+  contentName?: string;
+  contentType?: string;
+  attachmentDataRef?: AttachmentDataRef;
+}
+
+export interface AttachmentDataRef {
+  resourceName: string;
+  attachmentUploadToken: string;
+}
+
+export interface UploadAttachmentResponse {
+  attachmentDataRef: AttachmentDataRef;
+}
+
 export interface ChatMessage {
   name: string;
-  sender?: {
-    name?: string;
-    displayName?: string;
-    type?: string;
-  };
+  sender?: User;
   createTime?: string;
   lastUpdateTime?: string;
   deleteTime?: string;
   text?: string;
-  formattedText?: string;
+  formatted_text?: string;
   thread?: ChatThread;
   threadReply?: boolean;
+  attachments?: Attachment[];
 }
 
 export interface ChatMessagePage {

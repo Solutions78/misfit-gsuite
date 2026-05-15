@@ -1,10 +1,13 @@
-import { useEffect, Component, type ReactNode, type ErrorInfo } from "react";
+import { useEffect, useState, Component, type ReactNode, type ErrorInfo } from "react";
 import { listen } from "@tauri-apps/api/event";
 import "./App.css";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useAuthStore } from "@/store/authStore";
 import { getCurrentAccount, listAccounts } from "@/lib/tauri";
+import { dbg } from "@/lib/debugLog";
 import AppShell from "@/components/layout/AppShell";
+
+const IS_DEV = import.meta.env.DEV;
 import LoginScreen from "@/components/auth/LoginScreen";
 
 const queryClient = new QueryClient({
@@ -49,33 +52,129 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | 
 }
 
 function AppContent() {
-  const { isAuthenticated, setCurrentAccount, addAccount } = useAuthStore();
+  const { isAuthenticated, setCurrentAccount, addAccount, reset } = useAuthStore();
+  const [authChecked, setAuthChecked] = useState(false);
+  const [hasStoredAccount, setHasStoredAccount] = useState(false);
 
   useEffect(() => {
+    let isMounted = true;
+    let unlistenRestored: (() => void) | undefined;
+    let unlistenComplete: (() => void) | undefined;
+    let unlistenSignedOut: (() => void) | undefined;
+    let unlistenRestoreFailed: (() => void) | undefined;
+
     const restore = async () => {
       try {
-        const [account, accounts] = await Promise.all([
-          getCurrentAccount(),
-          listAccounts(),
-        ]);
-        accounts.forEach((a) => addAccount(a));
-        if (account) setCurrentAccount(account);
-      } catch {
-        // Not signed in yet
+        // Do this sequentially. getCurrentAccount() now validates the Keychain
+        // token and removes stale DB rows when the Keychain item was deleted.
+        const account = await getCurrentAccount();
+        const accounts = await listAccounts();
+        if (IS_DEV) dbg("Auth", "restoring accounts", { account, accounts });
+        if (!isMounted) return;
+        if (account) {
+          accounts.forEach((a) => addAccount(a));
+          setCurrentAccount(account);
+          setHasStoredAccount(false);
+        } else {
+          setHasStoredAccount(accounts.length > 0);
+        }
+        setAuthChecked(true);
+      } catch (err) {
+        if (IS_DEV) dbg("Auth", "restore failed", err);
+        if (!isMounted) return;
+        reset();
+        setHasStoredAccount(false);
+        setAuthChecked(true);
       }
     };
+
+    listen<string>("auth::restored", (event) => {
+      if (IS_DEV) dbg("Auth", "event: restored", event.payload);
+      restore();
+    }).then((fn) => {
+      if (!isMounted) fn();
+      else unlistenRestored = fn;
+    });
+
+    listen<string>("auth::complete", (event) => {
+      if (IS_DEV) dbg("Auth", "event: complete", event.payload);
+      restore();
+    }).then((fn) => {
+      if (!isMounted) fn();
+      else unlistenComplete = fn;
+    });
+
+    listen<string>("auth::signed_out", (event) => {
+      if (IS_DEV) dbg("Auth", "event: signed_out", event.payload);
+      reset();
+      setHasStoredAccount(false);
+      setAuthChecked(true);
+    }).then((fn) => {
+      if (!isMounted) fn();
+      else unlistenSignedOut = fn;
+    });
+
+    listen<string>("auth::restore_failed", (event) => {
+      if (IS_DEV) dbg("Auth", "event: restore_failed", event.payload);
+      reset();
+      setHasStoredAccount(false);
+      setAuthChecked(true);
+    }).then((fn) => {
+      if (!isMounted) fn();
+      else unlistenRestoreFailed = fn;
+    });
+
     restore();
 
-    const unlistenRestored = listen<string>("auth::restored", () => restore());
-    const unlistenComplete = listen<string>("auth::complete", () => restore());
-
     return () => {
-      unlistenRestored.then((fn) => fn());
-      unlistenComplete.then((fn) => fn());
+      isMounted = false;
+      unlistenRestored?.();
+      unlistenComplete?.();
+      unlistenSignedOut?.();
+      unlistenRestoreFailed?.();
     };
   }, []);
 
+  useEffect(() => {
+    if (isAuthenticated || !authChecked || !hasStoredAccount) return;
+
+    const timeout = window.setTimeout(() => {
+      if (IS_DEV) {
+        dbg("Auth", "stored account did not unlock; falling back to login");
+      }
+      reset();
+      setHasStoredAccount(false);
+    }, 10_000);
+
+    return () => window.clearTimeout(timeout);
+  }, [authChecked, hasStoredAccount, isAuthenticated, reset]);
+
   if (!isAuthenticated) {
+    // Waiting for Keychain/Touch ID approval — show spinner instead of login screen.
+    if (!authChecked || hasStoredAccount) {
+      return (
+        <div className="h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100">
+          <div className="flex flex-col items-center gap-3">
+            <div className="w-8 h-8 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
+            <p className="text-sm font-semibold text-gray-700">Waiting for authentication…</p>
+            <p className="text-xs text-gray-500">Use Touch ID, Apple Watch, or your Mac login password to unlock Google credentials.</p>
+            {authChecked && (
+              <button
+                type="button"
+                onClick={() => {
+                  reset();
+                  setHasStoredAccount(false);
+                  setAuthChecked(true);
+                }}
+                className="mt-2 rounded-xl bg-blue-600 px-4 py-2 text-xs font-bold text-white shadow hover:bg-blue-700"
+              >
+                Sign in again
+              </button>
+            )}
+          </div>
+        </div>
+      );
+    }
     return <LoginScreen />;
   }
 

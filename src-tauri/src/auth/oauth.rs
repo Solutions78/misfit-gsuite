@@ -4,7 +4,6 @@ use chrono::{DateTime, Duration, Utc};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{oneshot, Mutex};
 
@@ -19,12 +18,33 @@ pub const SCOPES: &[&str] = &[
     "https://www.googleapis.com/auth/gmail.modify",
     "https://www.googleapis.com/auth/gmail.send",
     "https://www.googleapis.com/auth/calendar",
+    "https://www.googleapis.com/auth/drive",
+    "https://www.googleapis.com/auth/cloud-platform",
+    "https://www.googleapis.com/auth/admin.directory.user.readonly",
     "https://www.googleapis.com/auth/chat.messages",
+    "https://www.googleapis.com/auth/chat.messages.create",
+    "https://www.googleapis.com/auth/chat.memberships.readonly",
     "https://www.googleapis.com/auth/chat.spaces.readonly",
+    "https://www.googleapis.com/auth/chat.spaces.create",
+    "https://www.googleapis.com/auth/contacts.readonly",
+    "https://www.googleapis.com/auth/directory.readonly",
     "https://www.googleapis.com/auth/generative-language.retriever",
+    "https://www.googleapis.com/auth/documents",
+    "https://www.googleapis.com/auth/drive.file",
     "openid",
     "email",
     "profile",
+];
+
+// Only enforce scopes that have been on the OAuth consent screen from day one.
+// Adding a new scope here forces every existing user to re-authenticate, so only
+// list scopes after they've been granted on the GCP consent screen.
+pub const REQUIRED_REAUTH_SCOPES: &[&str] = &[
+    "https://www.googleapis.com/auth/gmail.modify",
+    "https://www.googleapis.com/auth/gmail.send",
+    "https://www.googleapis.com/auth/calendar",
+    "https://www.googleapis.com/auth/chat.messages",
+    "https://www.googleapis.com/auth/chat.spaces.readonly",
 ];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -36,11 +56,25 @@ pub struct TokenSet {
     pub display_name: String,
     pub picture_url: Option<String>,
     pub scopes: Vec<String>,
+    #[serde(default)]
+    pub google_user_id: String,
 }
 
 impl TokenSet {
     pub fn is_expired(&self) -> bool {
         Utc::now() + Duration::minutes(5) >= self.expires_at
+    }
+
+    pub fn missing_required_scopes(&self) -> Vec<&'static str> {
+        REQUIRED_REAUTH_SCOPES
+            .iter()
+            .copied()
+            .filter(|scope| !self.scopes.iter().any(|granted| granted == scope))
+            .collect()
+    }
+
+    pub fn has_required_scopes(&self) -> bool {
+        self.missing_required_scopes().is_empty()
     }
 }
 
@@ -92,6 +126,7 @@ pub struct TokenResponse {
 
 #[derive(Deserialize)]
 pub struct UserInfo {
+    pub sub: Option<String>,
     pub email: String,
     pub name: Option<String>,
     pub picture: Option<String>,
@@ -116,7 +151,11 @@ pub fn generate_pkce() -> PkceChallenge {
     rand::thread_rng().fill_bytes(&mut state_bytes);
     let state = URL_SAFE_NO_PAD.encode(state_bytes);
 
-    PkceChallenge { verifier, challenge, state }
+    PkceChallenge {
+        verifier,
+        challenge,
+        state,
+    }
 }
 
 pub fn build_auth_url(client_id: &str, pkce: &PkceChallenge) -> String {
@@ -208,9 +247,7 @@ pub async fn fetch_user_info(
     Ok(resp)
 }
 
-pub async fn run_oauth_callback_server(
-    expected_state: String,
-) -> Result<String, AppError> {
+pub async fn run_oauth_callback_server(expected_state: String) -> Result<String, AppError> {
     let (tx, rx) = oneshot::channel::<Result<String, String>>();
     let tx = Arc::new(Mutex::new(Some(tx)));
 
@@ -237,11 +274,14 @@ pub async fn run_oauth_callback_server(
                     let _ = sender.send(result);
                 }
 
-                Html(r#"<html><body style="font-family:system-ui;text-align:center;padding:60px">
+                Html(
+                    r#"<html><body style="font-family:system-ui;text-align:center;padding:60px">
                     <h2>✅ Signed in successfully!</h2>
                     <p>You can close this tab and return to Misfit GSuite.</p>
                     <script>setTimeout(()=>window.close(),2000)</script>
-                </body></html>"#.to_string())
+                </body></html>"#
+                        .to_string(),
+                )
             }
         }),
     );
@@ -282,6 +322,7 @@ pub fn token_response_to_set(
         access_token: resp.access_token,
         refresh_token,
         expires_at,
+        google_user_id: user_info.sub.unwrap_or_default(),
         email: user_info.email,
         display_name: user_info.name.unwrap_or_default(),
         picture_url: user_info.picture,

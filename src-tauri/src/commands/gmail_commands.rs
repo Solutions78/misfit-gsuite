@@ -2,12 +2,10 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::api::gmail::{
-    self, GmailMessage, Label, MessageBody, MessageHeader, MessagePart, Thread,
-    ThreadListResponse, ThreadSummary, ThreadSummaryPage, SentMessage,
+    self, EmailView, GmailMessage, Label, MessageBody, MessageHeader, MessagePart, SentMessage,
+    Thread, ThreadListResponse, ThreadStubPublic, ThreadSummary, ThreadSummaryPage,
 };
-use crate::db::queries::{
-    self, CachedMessage, CachedThreadSummary,
-};
+use crate::db::queries::{self, CachedMessage, CachedThreadSummary};
 use crate::AppState;
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -24,6 +22,7 @@ fn cached_to_thread_summary(c: CachedThreadSummary) -> ThreadSummary {
         is_unread: !c.is_read,
         is_starred: c.is_starred,
         message_count: c.message_count as usize,
+        label_ids: c.label_ids,
     }
 }
 
@@ -49,11 +48,8 @@ async fn current_email(state: &AppState) -> String {
 /// Extract the text body from a GmailMessage payload tree (HTML preferred,
 /// plain-text fallback). Returns base64url-decoded string.
 fn extract_body_html(msg: &GmailMessage) -> Option<String> {
-    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
-
     fn decode(data: &str) -> Option<String> {
-        let bytes = URL_SAFE_NO_PAD.decode(data.replace('-', "+").replace('_', "/")).ok()?;
-        String::from_utf8(bytes).ok()
+        gmail::decode_gmail_base64_string(data).ok()
     }
 
     fn find_in_part(part: &MessagePart, prefer_html: bool) -> Option<String> {
@@ -107,13 +103,22 @@ fn cached_msg_to_gmail_message(cached: &CachedMessage) -> GmailMessage {
     // Reconstruct minimal headers so the frontend can display From/Subject/Date
     let mut headers: Vec<MessageHeader> = Vec::new();
     if let Some(from) = &cached.from_address {
-        headers.push(MessageHeader { name: "From".to_string(), value: from.clone() });
+        headers.push(MessageHeader {
+            name: "From".to_string(),
+            value: from.clone(),
+        });
     }
     if let Some(subject) = &cached.subject {
-        headers.push(MessageHeader { name: "Subject".to_string(), value: subject.clone() });
+        headers.push(MessageHeader {
+            name: "Subject".to_string(),
+            value: subject.clone(),
+        });
     }
     if let Some(date) = &cached.date_header {
-        headers.push(MessageHeader { name: "Date".to_string(), value: date.clone() });
+        headers.push(MessageHeader {
+            name: "Date".to_string(),
+            value: date.clone(),
+        });
     }
 
     let body_data = cached.body_html.as_ref().map(|html| {
@@ -141,6 +146,7 @@ fn cached_msg_to_gmail_message(cached: &CachedMessage) -> GmailMessage {
         size_estimate: None,
         internal_date: cached.internal_date.map(|d| d.to_string()),
         history_id: None,
+        raw: None,
     }
 }
 
@@ -172,6 +178,28 @@ pub async fn list_threads(
     .map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+pub async fn get_email_view(
+    state: State<'_, AppState>,
+    msg_id: String,
+) -> Result<EmailView, String> {
+    let api = state.api.read().await;
+    gmail::get_email_view(&api, &msg_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn get_thread_view(
+    state: State<'_, AppState>,
+    thread_id: String,
+) -> Result<Vec<EmailView>, String> {
+    let api = state.api.read().await;
+    gmail::get_thread_view(&api, &thread_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// Returns cached thread summaries immediately, then spawns a background sync.
 /// On first launch (empty cache) does a blocking fetch-and-cache before returning.
 #[tauri::command]
@@ -180,31 +208,27 @@ pub async fn list_thread_summaries(
     app: AppHandle,
     params: ListThreadsParams,
 ) -> Result<ThreadSummaryPage, String> {
-    let label_id = params.label_ids.first().cloned().unwrap_or_else(|| "INBOX".to_string());
+    let label_id = params
+        .label_ids
+        .first()
+        .cloned()
+        .unwrap_or_else(|| "INBOX".to_string());
     let max = params.max_results.unwrap_or(50) as i64;
 
     // --- Try cache first ---
     let cached = {
         let db = state.db.lock().await;
-        queries::list_cached_thread_summaries(&db, &label_id, max, 0)
-            .unwrap_or_default()
+        queries::list_cached_thread_summaries(&db, &label_id, max, 0).unwrap_or_default()
     };
 
     if !cached.is_empty() {
-        // Return cached data immediately, kick off background sync
-        let threads: Vec<ThreadSummary> = cached.into_iter().map(cached_to_thread_summary).collect();
+        // Return cached data immediately
+        let threads: Vec<ThreadSummary> =
+            cached.into_iter().map(cached_to_thread_summary).collect();
         let page = ThreadSummaryPage {
             threads,
             next_page_token: None,
         };
-
-        // Background sync — clone what we need
-        let app_handle = app.clone();
-        let label_ids = params.label_ids.clone();
-        tauri::async_runtime::spawn(async move {
-            let state = app_handle.state::<AppState>();
-            background_sync_threads(&state, &app_handle, &label_ids, max as u32).await;
-        });
 
         return Ok(page);
     }
@@ -235,11 +259,7 @@ pub async fn list_thread_summaries(
 }
 
 /// Persist a list of ThreadSummary values to the local DB.
-async fn cache_thread_summaries(
-    state: &AppState,
-    summaries: Vec<ThreadSummary>,
-    label_id: &str,
-) {
+async fn cache_thread_summaries(state: &AppState, summaries: Vec<ThreadSummary>, label_id: &str) {
     let db = state.db.lock().await;
     for s in summaries {
         let msg = CachedMessage {
@@ -252,14 +272,20 @@ async fn cache_thread_summaries(
             date_header: s.date,
             label_ids: {
                 let mut labels = vec![label_id.to_string()];
-                if s.is_unread { labels.push("UNREAD".to_string()); }
-                if s.is_starred { labels.push("STARRED".to_string()); }
+                if s.is_unread {
+                    labels.push("UNREAD".to_string());
+                }
+                if s.is_starred {
+                    labels.push("STARRED".to_string());
+                }
                 labels
             },
             is_read: !s.is_unread,
             is_starred: s.is_starred,
             has_attachment: false,
-            internal_date: s.internal_date.as_deref()
+            internal_date: s
+                .internal_date
+                .as_deref()
                 .and_then(|d| d.parse::<i64>().ok()),
         };
         let _ = queries::upsert_thread_summary(&db, &msg);
@@ -280,7 +306,10 @@ async fn background_sync_threads(
 
     match result {
         Ok(page) => {
-            let label_id = label_ids.first().cloned().unwrap_or_else(|| "INBOX".to_string());
+            let label_id = label_ids
+                .first()
+                .cloned()
+                .unwrap_or_else(|| "INBOX".to_string());
             cache_thread_summaries(state, page.threads, &label_id).await;
             let _ = app.emit("mail::synced", ());
         }
@@ -304,7 +333,10 @@ pub async fn search_thread_summaries(
 
     if !cached.is_empty() {
         let threads = cached.into_iter().map(cached_to_thread_summary).collect();
-        return Ok(ThreadSummaryPage { threads, next_page_token: None });
+        return Ok(ThreadSummaryPage {
+            threads,
+            next_page_token: None,
+        });
     }
 
     // Fall back to API
@@ -317,18 +349,15 @@ pub async fn search_thread_summaries(
 /// Returns a full Thread. Checks local cache for body_html on each message;
 /// if all bodies present, returns from DB. Otherwise fetches from API.
 #[tauri::command]
-pub async fn get_thread(
-    state: State<'_, AppState>,
-    thread_id: String,
-) -> Result<Thread, String> {
+pub async fn get_thread(state: State<'_, AppState>, thread_id: String) -> Result<Thread, String> {
     // Check if we have all messages for this thread cached with bodies
     let cached_msgs = {
         let db = state.db.lock().await;
         queries::get_messages_for_thread(&db, &thread_id).unwrap_or_default()
     };
 
-    let all_have_bodies = !cached_msgs.is_empty()
-        && cached_msgs.iter().all(|m| m.body_html.is_some());
+    let all_have_bodies =
+        !cached_msgs.is_empty() && cached_msgs.iter().all(|m| m.body_html.is_some());
 
     if all_have_bodies {
         let messages: Vec<GmailMessage> = cached_msgs
@@ -350,33 +379,14 @@ pub async fn get_thread(
             .map_err(|e| e.to_string())?
     };
 
-    // Persist bodies to DB
+    // Persist bodies to DB. Only store the body_html; don't upsert per-message rows
+    // with null subject/from as that would clobber good thread-summary rows.
     if let Some(msgs) = &thread.messages {
         let db = state.db.lock().await;
         for msg in msgs {
             if let Some(body_html) = extract_body_html(msg) {
                 let _ = queries::store_body(&db, &msg.id, &body_html);
             }
-            // Also upsert metadata for any messages not yet in cache
-            let label_ids = msg.label_ids.clone().unwrap_or_default();
-            let cached = CachedMessage {
-                id: msg.id.clone(),
-                thread_id: msg.thread_id.clone(),
-                subject: None,
-                from_address: None,
-                snippet: msg.snippet.clone(),
-                body_html: extract_body_html(msg),
-                date_header: None,
-                label_ids: label_ids.clone(),
-                is_read: !label_ids.contains(&"UNREAD".to_string()),
-                is_starred: label_ids.contains(&"STARRED".to_string()),
-                has_attachment: false,
-                internal_date: msg
-                    .internal_date
-                    .as_deref()
-                    .and_then(|d| d.parse::<i64>().ok()),
-            };
-            let _ = queries::upsert_message(&db, &cached);
         }
     }
 
@@ -389,7 +399,9 @@ pub async fn get_message(
     msg_id: String,
 ) -> Result<GmailMessage, String> {
     let api = state.api.read().await;
-    gmail::get_message(&api, &msg_id).await.map_err(|e| e.to_string())
+    gmail::get_message(&api, &msg_id)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -472,7 +484,9 @@ pub async fn send_message(
             let op_id = queries::enqueue_op(&db, "send", &payload.to_string())
                 .map_err(|e| e.to_string())?;
             drop(db);
-            Ok(serde_json::json!({ "id": null, "threadId": null, "queued": true, "queueId": op_id }))
+            Ok(
+                serde_json::json!({ "id": null, "threadId": null, "queued": true, "queueId": op_id }),
+            )
         }
         Err(e) => Err(e.to_string()),
     }
@@ -494,16 +508,22 @@ pub async fn create_draft(
         .unwrap_or_default();
     drop(oauth);
 
-    let raw = gmail::build_raw_message(&to, &from, &subject, &html_body, in_reply_to.as_deref(), None);
-    gmail::create_draft(&api, raw).await.map_err(|e| e.to_string())
+    let raw = gmail::build_raw_message(
+        &to,
+        &from,
+        &subject,
+        &html_body,
+        in_reply_to.as_deref(),
+        None,
+    );
+    gmail::create_draft(&api, raw)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// Trash a message optimistically, enqueue on network failure.
 #[tauri::command]
-pub async fn trash_message(
-    state: State<'_, AppState>,
-    msg_id: String,
-) -> Result<(), String> {
+pub async fn trash_message(state: State<'_, AppState>, msg_id: String) -> Result<(), String> {
     // Optimistic local update
     {
         let db = state.db.lock().await;
@@ -571,10 +591,7 @@ pub async fn star_message(
 
 /// Archive a message optimistically, enqueue on network failure.
 #[tauri::command]
-pub async fn archive_message(
-    state: State<'_, AppState>,
-    msg_id: String,
-) -> Result<(), String> {
+pub async fn archive_message(state: State<'_, AppState>, msg_id: String) -> Result<(), String> {
     {
         let db = state.db.lock().await;
         let _ = queries::apply_local_label_change(&db, &msg_id, &[], &["INBOX".to_string()]);
@@ -658,7 +675,9 @@ pub async fn setup_gmail_watch(
     topic_name: String,
 ) -> Result<String, String> {
     let api = state.api.read().await;
-    let watch_resp = gmail::watch(&api, &topic_name).await.map_err(|e| e.to_string())?;
+    let watch_resp = gmail::watch(&api, &topic_name)
+        .await
+        .map_err(|e| e.to_string())?;
     Ok(watch_resp.history_id)
 }
 
@@ -677,56 +696,80 @@ pub async fn get_attachment(
 // ── Sync ───────────────────────────────────────────────────────────────────
 
 /// Full or incremental inbox sync.
-/// - No history_id → full sync: fetch 100 threads, store metadata in DB
-/// - Has history_id → incremental sync via history.list API
-/// Emits `mail::synced` when done.
-#[tauri::command]
-pub async fn sync_inbox(
-    state: State<'_, AppState>,
-    app: AppHandle,
-) -> Result<(), String> {
+/// Internal sync logic shared between the Tauri command and the background task.
+pub async fn sync_inbox_internal(state: &AppState, app: &AppHandle) -> Result<(), String> {
     let email = current_email(&state).await;
     if email.is_empty() {
         return Err("Not authenticated".to_string());
     }
 
-    let history_id = {
+    // Deduplicate sync calls
+    let _sync_guard = state.sync_lock.lock().await;
+
+    let mut history_id = {
         let db = state.db.lock().await;
         queries::get_sync_state(&db, &email).unwrap_or(None)
     };
 
-    match history_id {
-        None => {
-            // Full sync
-            let page = {
-                let api = state.api.read().await;
-                gmail::list_thread_summaries(
-                    &api,
-                    &["INBOX".to_string()],
-                    None,
-                    100,
-                )
-                .await
-                .map_err(|e| e.to_string())?
-            };
+    if let Some(hid) = &history_id {
+        let api = state.api.read().await;
+        match gmail::get_history(&api, hid).await {
+            Ok(history) => {
+                // Collect new message IDs that need full metadata fetch
+                let mut new_msg_ids: Vec<(String, String)> = Vec::new(); // (msg_id, thread_id)
 
-            {
+                if let Some(records) = history["history"].as_array() {
+                    for record in records {
+                        if let Some(added) = record["messagesAdded"].as_array() {
+                            for item in added {
+                                let msg_id =
+                                    item["message"]["id"].as_str().unwrap_or("").to_string();
+                                let thread_id = item["message"]["threadId"]
+                                    .as_str()
+                                    .unwrap_or("")
+                                    .to_string();
+                                if !msg_id.is_empty() {
+                                    new_msg_ids.push((msg_id, thread_id));
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Fetch full thread summaries for new messages
+                let new_summaries: Vec<gmail::ThreadSummary> = {
+                    let thread_ids: Vec<String> = {
+                        let mut seen = std::collections::HashSet::new();
+                        new_msg_ids
+                            .iter()
+                            .filter(|(_, tid)| seen.insert(tid.clone()))
+                            .map(|(_, tid)| tid.clone())
+                            .collect()
+                    };
+                    let mut results = Vec::new();
+                    for tid in thread_ids {
+                        let stub = gmail::ThreadStubPublic {
+                            id: tid,
+                            snippet: None,
+                        };
+                        results.push(gmail::fetch_summary_for_stub_public(&api, stub).await);
+                    }
+                    results
+                };
+
                 let db = state.db.lock().await;
-                for s in &page.threads {
+
+                // Upsert the fully-populated summaries
+                for s in new_summaries {
                     let cached = CachedMessage {
                         id: s.id.clone(),
                         thread_id: s.id.clone(),
-                        subject: s.subject.clone(),
-                        from_address: s.from.clone(),
-                        snippet: s.snippet.clone(),
+                        subject: s.subject,
+                        from_address: s.from,
+                        snippet: s.snippet,
                         body_html: None,
-                        date_header: s.date.clone(),
-                        label_ids: {
-                            let mut labels = vec!["INBOX".to_string()];
-                            if s.is_unread { labels.push("UNREAD".to_string()); }
-                            if s.is_starred { labels.push("STARRED".to_string()); }
-                            labels
-                        },
+                        date_header: s.date,
+                        label_ids: s.label_ids,
                         is_read: !s.is_unread,
                         is_starred: s.is_starred,
                         has_attachment: false,
@@ -738,92 +781,127 @@ pub async fn sync_inbox(
                     let _ = queries::upsert_message(&db, &cached);
                 }
 
-                // Seed a history_id — use a placeholder; real ID will come from
-                // a watch response or next history.list call
-                let fake_hid = chrono::Utc::now().timestamp_millis().to_string();
-                let _ = queries::update_sync_state(&db, &email, &fake_hid);
-            }
-        }
-        Some(hid) => {
-            // Incremental sync via history.list
-            let history = {
-                let api = state.api.read().await;
-                gmail::get_history(&api, &hid).await.map_err(|e| e.to_string())?
-            };
-
-            let db = state.db.lock().await;
-
-            // Process messagesAdded
-            if let Some(records) = history["history"].as_array() {
-                for record in records {
-                    if let Some(added) = record["messagesAdded"].as_array() {
-                        for item in added {
-                            let msg_id = item["message"]["id"].as_str().unwrap_or("");
-                            let thread_id = item["message"]["threadId"].as_str().unwrap_or("");
-                            if msg_id.is_empty() { continue; }
-
-                            let cached = CachedMessage {
-                                id: msg_id.to_string(),
-                                thread_id: thread_id.to_string(),
-                                subject: None,
-                                from_address: None,
-                                snippet: None,
-                                body_html: None,
-                                date_header: None,
-                                label_ids: item["message"]["labelIds"]
+                // Process labelsAdded / labelsRemoved
+                if let Some(records) = history["history"].as_array() {
+                    for record in records {
+                        if let Some(la) = record["labelsAdded"].as_array() {
+                            for item in la {
+                                let msg_id = item["message"]["id"].as_str().unwrap_or("");
+                                let labels: Vec<String> = item["labelIds"]
                                     .as_array()
                                     .map(|arr| {
                                         arr.iter()
                                             .filter_map(|v| v.as_str().map(String::from))
                                             .collect()
                                     })
-                                    .unwrap_or_default(),
-                                is_read: false,
-                                is_starred: false,
-                                has_attachment: false,
-                                internal_date: None,
-                            };
-                            let _ = queries::upsert_message(&db, &cached);
-                        }
-                    }
-
-                    // Process labelsAdded / labelsRemoved for optimistic consistency
-                    if let Some(la) = record["labelsAdded"].as_array() {
-                        for item in la {
-                            let msg_id = item["message"]["id"].as_str().unwrap_or("");
-                            let labels: Vec<String> = item["labelIds"]
-                                .as_array()
-                                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
-                                .unwrap_or_default();
-                            if !msg_id.is_empty() {
-                                let _ = queries::apply_local_label_change(&db, msg_id, &labels, &[]);
+                                    .unwrap_or_default();
+                                if !msg_id.is_empty() {
+                                    let _ = queries::apply_local_label_change(
+                                        &db,
+                                        msg_id,
+                                        &labels,
+                                        &[],
+                                    );
+                                }
                             }
                         }
-                    }
-                    if let Some(lr) = record["labelsRemoved"].as_array() {
-                        for item in lr {
-                            let msg_id = item["message"]["id"].as_str().unwrap_or("");
-                            let labels: Vec<String> = item["labelIds"]
-                                .as_array()
-                                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
-                                .unwrap_or_default();
-                            if !msg_id.is_empty() {
-                                let _ = queries::apply_local_label_change(&db, msg_id, &[], &labels);
+                        if let Some(lr) = record["labelsRemoved"].as_array() {
+                            for item in lr {
+                                let msg_id = item["message"]["id"].as_str().unwrap_or("");
+                                let labels: Vec<String> = item["labelIds"]
+                                    .as_array()
+                                    .map(|arr| {
+                                        arr.iter()
+                                            .filter_map(|v| v.as_str().map(String::from))
+                                            .collect()
+                                    })
+                                    .unwrap_or_default();
+                                if !msg_id.is_empty() {
+                                    let _ = queries::apply_local_label_change(
+                                        &db,
+                                        msg_id,
+                                        &[],
+                                        &labels,
+                                    );
+                                }
                             }
                         }
                     }
                 }
+
+                // Update stored history_id
+                if let Some(new_hid) = history["historyId"].as_str() {
+                    let _ = queries::update_sync_state(&db, &email, new_hid);
+                }
+            }
+            Err(e) => {
+                let err_str = e.to_string();
+                if err_str.contains("404") || err_str.contains("410") || err_str.contains("invalid")
+                {
+                    // historyId too old or not found — reset and fall through to full sync
+                    let db = state.db.lock().await;
+                    let _ = queries::clear_sync_state(&db, &email);
+                    history_id = None;
+                } else {
+                    return Err(err_str);
+                }
+            }
+        }
+    }
+
+    if history_id.is_none() {
+        // Full sync — fetch threads then current historyId
+        let page = {
+            let api = state.api.read().await;
+            gmail::list_thread_summaries(&api, &["INBOX".to_string()], None, 100)
+                .await
+                .map_err(|e| e.to_string())?
+        };
+        let profile = {
+            let api = state.api.read().await;
+            gmail::get_profile(&api).await.ok()
+        };
+
+        {
+            let db = state.db.lock().await;
+            for s in &page.threads {
+                let cached = CachedMessage {
+                    id: s.id.clone(),
+                    thread_id: s.id.clone(),
+                    subject: s.subject.clone(),
+                    from_address: s.from.clone(),
+                    snippet: s.snippet.clone(),
+                    body_html: None,
+                    date_header: s.date.clone(),
+                    label_ids: s.label_ids.clone(),
+                    is_read: !s.is_unread,
+                    is_starred: s.is_starred,
+                    has_attachment: false,
+                    internal_date: s
+                        .internal_date
+                        .as_deref()
+                        .and_then(|d| d.parse::<i64>().ok()),
+                };
+                let _ = queries::upsert_message(&db, &cached);
             }
 
-            // Update stored history_id
-            if let Some(new_hid) = history["historyId"].as_str() {
-                let _ = queries::update_sync_state(&db, &email, new_hid);
-            }
+            // Store the real current historyId so incremental sync works immediately
+            let hid = profile
+                .as_ref()
+                .and_then(|p| p["historyId"].as_str())
+                .unwrap_or("1");
+            let _ = queries::update_sync_state(&db, &email, hid);
         }
     }
 
     let _ = app.emit("mail::synced", ());
     Ok(())
+}
+
+/// Tauri command wrapper for sync_inbox_internal.
+#[tauri::command]
+pub async fn sync_inbox(state: State<'_, AppState>, app: AppHandle) -> Result<(), String> {
+    sync_inbox_internal(&state, &app).await
 }
 
 /// Drain pending operations — retry each against the API.
@@ -838,8 +916,7 @@ pub async fn drain_pending_ops(state: State<'_, AppState>) -> Result<usize, Stri
     let mut drained = 0usize;
 
     for op in ops {
-        let payload: serde_json::Value =
-            serde_json::from_str(&op.payload).unwrap_or_default();
+        let payload: serde_json::Value = serde_json::from_str(&op.payload).unwrap_or_default();
 
         let api_result: Result<(), String> = match op.op_type.as_str() {
             "send" => {
@@ -912,10 +989,9 @@ pub async fn drain_pending_ops(state: State<'_, AppState>) -> Result<usize, Stri
 }
 
 #[tauri::command]
-pub async fn create_label(
-    state: State<'_, AppState>,
-    name: String,
-) -> Result<Label, String> {
+pub async fn create_label(state: State<'_, AppState>, name: String) -> Result<Label, String> {
     let api = state.api.read().await;
-    gmail::create_label(&api, &name).await.map_err(|e| e.to_string())
+    gmail::create_label(&api, &name)
+        .await
+        .map_err(|e| e.to_string())
 }

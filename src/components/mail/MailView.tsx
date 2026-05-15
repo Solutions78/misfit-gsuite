@@ -1,21 +1,9 @@
-import { useState, useRef, useEffect } from "react";
+import { useState } from "react";
 import { useUIStore } from "@/store/uiStore";
 import MessageList from "./MessageList";
 import DetailPane from "./DetailPane";
-import { dbg } from "@/lib/debugLog";
 
 export default function MailView() {
-  const renderCount = useRef(0);
-  renderCount.current += 1;
-  const containerRef = useRef<HTMLDivElement>(null);
-  dbg("MailView", `render #${renderCount.current}`);
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    const children = Array.from(el.children) as HTMLElement[];
-    dbg("MailView.size", children.map((c, i) => `child[${i}] w=${c.offsetWidth} class="${c.className.slice(0,40)}"`).join(" | "));
-  });
-
   // MailView deliberately does NOT read selectedThreadId.
   // Doing so caused it to re-render on every click, which collapsed the flex layout
   // during React's reconciliation of EmptyState → MessageDetail.
@@ -66,7 +54,6 @@ export default function MailView() {
 
   return (
     <div
-      ref={containerRef}
       className="flex h-full w-full overflow-hidden bg-white"
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}

@@ -1,8 +1,8 @@
 use std::sync::Arc;
 use std::time::Duration;
+use tauri::Manager;
 use tauri::{AppHandle, Emitter};
 use tokio::time::interval;
-use tauri::Manager;
 
 use crate::AppState;
 
@@ -29,16 +29,19 @@ pub async fn start_token_refresh_scheduler(state: Arc<AppState>, app: AppHandle)
                 .await
                 {
                     Ok(resp) => {
-                        let new_token = crate::auth::oauth::token_response_to_set(
+                        let mut new_token = crate::auth::oauth::token_response_to_set(
                             resp,
                             Some(token.refresh_token.clone()),
                             crate::auth::oauth::UserInfo {
+                                sub: Some(token.google_user_id.clone()),
                                 email: token.email.clone(),
                                 name: Some(token.display_name.clone()),
                                 picture: token.picture_url.clone(),
                             },
                         );
-                        let _ = crate::auth::keychain::store_token(&new_token);
+                        if new_token.scopes.is_empty() {
+                            new_token.scopes = token.scopes.clone();
+                        }
                         api.oauth_state.write().await.add_or_update(new_token);
                     }
                     Err(e) => {

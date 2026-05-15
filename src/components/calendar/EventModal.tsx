@@ -160,22 +160,22 @@ export default function EventModal({ event, initialDate, onClose }: Props) {
           {/* RSVP buttons for existing events */}
           {isEditing && event?.attendees && event.attendees.length > 0 && (
             <div className="flex items-center gap-2 pt-1">
-              <span className="text-xs text-gray-500">RSVP:</span>
+              <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest mr-2">RSVP:</span>
               <button
                 onClick={() => rsvpMutation.mutate("accepted")}
-                className="px-3 py-1 text-xs bg-green-100 text-green-700 hover:bg-green-200 rounded-full transition-colors"
+                className="px-4 py-2 text-[10px] font-black uppercase tracking-widest bg-gray-900 text-white rounded-xl shadow-[0_0_15px_rgba(255,255,255,0.1)] border border-white/5 hover:bg-black transition-all active:scale-95"
               >
                 Accept
               </button>
               <button
                 onClick={() => rsvpMutation.mutate("tentative")}
-                className="px-3 py-1 text-xs bg-yellow-100 text-yellow-700 hover:bg-yellow-200 rounded-full transition-colors"
+                className="px-4 py-2 text-[10px] font-black uppercase tracking-widest bg-gray-900 text-white rounded-xl shadow-[0_0_15px_rgba(255,255,255,0.1)] border border-white/5 hover:bg-black transition-all active:scale-95"
               >
                 Maybe
               </button>
               <button
                 onClick={() => rsvpMutation.mutate("declined")}
-                className="px-3 py-1 text-xs bg-red-100 text-red-700 hover:bg-red-200 rounded-full transition-colors"
+                className="px-4 py-2 text-[10px] font-black uppercase tracking-widest bg-gray-900 text-white rounded-xl shadow-[0_0_15px_rgba(255,255,255,0.1)] border border-white/5 hover:bg-black transition-all active:scale-95"
               >
                 Decline
               </button>
@@ -199,16 +199,16 @@ export default function EventModal({ event, initialDate, onClose }: Props) {
           <div className="flex items-center gap-2">
             <button
               onClick={onClose}
-              className="px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-xl transition-colors"
+              className="px-4 py-2 text-[10px] font-black uppercase tracking-widest text-gray-400 hover:text-gray-900 transition-colors"
             >
               Cancel
             </button>
             <button
               onClick={handleSave}
               disabled={!title.trim() || isPending}
-              className="flex items-center gap-1.5 px-4 py-2 text-sm bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-xl transition-colors"
+              className="flex items-center gap-2 px-6 py-2.5 bg-gray-900 disabled:opacity-50 text-white rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all duration-200 shadow-[0_0_20px_rgba(255,255,255,0.12)] border border-white/5 active:scale-95 group"
             >
-              {isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
+              {isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5 text-blue-400 group-hover:scale-110 transition-transform" />}
               {isEditing ? "Save" : "Create"}
             </button>
           </div>

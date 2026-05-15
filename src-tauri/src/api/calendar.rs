@@ -150,7 +150,11 @@ pub async fn create_event(
     if event.conference_data_version.is_some() {
         url.push_str("?conferenceDataVersion=1");
     }
-    let resp = client.post(&url, event).await?.json::<CalendarEvent>().await?;
+    let resp = client
+        .post(&url, event)
+        .await?
+        .json::<CalendarEvent>()
+        .await?;
     Ok(resp)
 }
 
@@ -166,7 +170,11 @@ pub async fn update_event(
         urlencoding::encode(calendar_id),
         urlencoding::encode(event_id)
     );
-    let resp = client.put(&url, event).await?.json::<CalendarEvent>().await?;
+    let resp = client
+        .put(&url, event)
+        .await?
+        .json::<CalendarEvent>()
+        .await?;
     Ok(resp)
 }
 
@@ -195,7 +203,10 @@ pub async fn respond_to_event(
     let event = get_event(client, calendar_id, event_id).await?;
     let mut event_json = serde_json::to_value(&event)?;
 
-    if let Some(attendees) = event_json.get_mut("attendees").and_then(|a| a.as_array_mut()) {
+    if let Some(attendees) = event_json
+        .get_mut("attendees")
+        .and_then(|a| a.as_array_mut())
+    {
         for attendee in attendees.iter_mut() {
             if attendee.get("email").and_then(|e| e.as_str()) == Some(user_email) {
                 attendee["responseStatus"] = serde_json::Value::String(status.to_string());

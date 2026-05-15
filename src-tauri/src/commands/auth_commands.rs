@@ -3,7 +3,6 @@ use tauri::{Emitter, State};
 
 use crate::auth::{keychain, oauth};
 use crate::AppState;
-use crate::error::AppError;
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -52,13 +51,24 @@ pub async fn start_oauth_flow(
     drop(api_client);
 
     let token_set = oauth::token_response_to_set(token_resp, None, user_info);
+    let missing_scopes = token_set.missing_required_scopes();
+    if !missing_scopes.is_empty() {
+        return Err(format!(
+            "Google did not grant required scopes. Reconfigure OAuth consent and retry. Missing: {}",
+            missing_scopes.join(", ")
+        ));
+    }
 
     // Store in keychain
     keychain::store_token(&token_set).map_err(|e| e.to_string())?;
 
     // Update app state
-    let mut api_client = state.api.write().await;
-    api_client.oauth_state.write().await.add_or_update(token_set.clone());
+    let api_client = state.api.write().await;
+    api_client
+        .oauth_state
+        .write()
+        .await
+        .add_or_update(token_set.clone());
 
     // Persist account to DB
     {
@@ -85,21 +95,62 @@ pub async fn start_oauth_flow(
 #[tauri::command]
 pub async fn get_current_account(
     state: State<'_, AppState>,
+    app: tauri::AppHandle,
 ) -> Result<Option<AccountInfo>, String> {
-    let api_client = state.api.read().await;
-    let oauth_state = api_client.oauth_state.read().await;
-    let token = oauth_state.current_token();
-    Ok(token.map(|t| AccountInfo {
-        email: t.email.clone(),
-        display_name: t.display_name.clone(),
-        picture_url: t.picture_url.clone(),
-    }))
+    {
+        let api_client = state.api.read().await;
+        let oauth_state = api_client.oauth_state.read().await;
+        if let Some(token) = oauth_state.current_token() {
+            return Ok(Some(AccountInfo {
+                email: token.email.clone(),
+                display_name: token.display_name.clone(),
+                picture_url: token.picture_url.clone(),
+            }));
+        }
+    }
+
+    // If the frontend asks before the setup restore event arrives, recover here.
+    // If the Keychain item was manually deleted, remove the stale DB row and
+    // return None so the login screen can be shown immediately.
+    let accounts = {
+        let db = state.db.lock().await;
+        crate::db::queries::list_accounts(&db).map_err(|e| e.to_string())?
+    };
+
+    for (email, _, _) in accounts {
+        match keychain::load_token(&email) {
+            Ok(Some(token)) if token.has_required_scopes() => {
+                let api_client = state.api.read().await;
+                api_client
+                    .oauth_state
+                    .write()
+                    .await
+                    .add_or_update(token.clone());
+                let _ = app.emit("auth::restored", &token.email);
+                return Ok(Some(AccountInfo {
+                    email: token.email,
+                    display_name: token.display_name,
+                    picture_url: token.picture_url,
+                }));
+            }
+            Ok(Some(_)) | Ok(None) => {
+                let _ = keychain::delete_token(&email);
+                let db = state.db.lock().await;
+                let _ = crate::db::queries::delete_account(&db, &email);
+                let _ = app.emit("auth::signed_out", &email);
+            }
+            Err(err) => {
+                let _ = app.emit("auth::restore_failed", &email);
+                return Err(err.to_string());
+            }
+        }
+    }
+
+    Ok(None)
 }
 
 #[tauri::command]
-pub async fn list_accounts(
-    state: State<'_, AppState>,
-) -> Result<Vec<AccountInfo>, String> {
+pub async fn list_accounts(state: State<'_, AppState>) -> Result<Vec<AccountInfo>, String> {
     let db = state.db.lock().await;
     let accounts = crate::db::queries::list_accounts(&db).map_err(|e| e.to_string())?;
     Ok(accounts
@@ -118,12 +169,36 @@ pub async fn switch_account(
     email: String,
 ) -> Result<AccountInfo, String> {
     // Try to load from keychain
-    let token = keychain::load_token(&email)
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| format!("No stored token for {}", email))?;
+    let token = match keychain::load_token(&email).map_err(|e| e.to_string())? {
+        Some(token) => token,
+        None => {
+            let db = state.db.lock().await;
+            crate::db::queries::delete_account(&db, &email).map_err(|e| e.to_string())?;
+            return Err(format!(
+                "No stored Keychain token for {}. Please sign in again.",
+                email
+            ));
+        }
+    };
+
+    if !token.has_required_scopes() {
+        keychain::delete_token(&email).map_err(|e| e.to_string())?;
+        {
+            let db = state.db.lock().await;
+            crate::db::queries::delete_account(&db, &email).map_err(|e| e.to_string())?;
+        }
+        return Err(format!(
+            "Stored Google token is missing required scopes. Please sign in again for {}.",
+            email
+        ));
+    }
 
     let api_client = state.api.write().await;
-    api_client.oauth_state.write().await.add_or_update(token.clone());
+    api_client
+        .oauth_state
+        .write()
+        .await
+        .add_or_update(token.clone());
 
     Ok(AccountInfo {
         email: token.email,
@@ -139,6 +214,10 @@ pub async fn sign_out(
     app: tauri::AppHandle,
 ) -> Result<(), String> {
     keychain::delete_token(&email).map_err(|e| e.to_string())?;
+    {
+        let db = state.db.lock().await;
+        crate::db::queries::delete_account(&db, &email).map_err(|e| e.to_string())?;
+    }
     let api_client = state.api.read().await;
     let mut oauth = api_client.oauth_state.write().await;
     oauth.accounts.retain(|t| t.email != email);
