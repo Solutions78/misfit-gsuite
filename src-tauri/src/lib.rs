@@ -27,15 +27,25 @@ unsafe impl Sync for AppState {}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // In dev, load .env from the working directory so `npm run tauri dev` works
+    // without setting env vars in the shell. In release builds the values are
+    // baked in at compile time via env!() below and dotenv() is a no-op.
     dotenvy::dotenv().ok();
 
-    let client_id = std::env::var("GOOGLE_CLIENT_ID")
-        .expect("GOOGLE_CLIENT_ID environment variable must be set before starting the app");
+    // Credentials are baked into the binary at compile time from the build
+    // environment. The env!() macro fails the build (not the runtime) if the
+    // variable is unset, giving a clear error at `npm run tauri build`.
+    // In dev, dotenvy above loads .env first so std::env::var() is used as
+    // the runtime source; env!() provides the compile-time fallback for release.
+    let client_id =
+        std::env::var("GOOGLE_CLIENT_ID").unwrap_or_else(|_| env!("GOOGLE_CLIENT_ID").to_string());
     let client_secret = std::env::var("GOOGLE_CLIENT_SECRET")
-        .expect("GOOGLE_CLIENT_SECRET environment variable must be set before starting the app");
+        .unwrap_or_else(|_| env!("GOOGLE_CLIENT_SECRET").to_string());
 
-    let proxy_base = std::env::var("PROXY_BASE_URL").unwrap_or_default();
-    let proxy_app_token = std::env::var("PROXY_APP_TOKEN").unwrap_or_default();
+    let proxy_base = std::env::var("PROXY_BASE_URL")
+        .unwrap_or_else(|_| option_env!("PROXY_BASE_URL").unwrap_or("").to_string());
+    let proxy_app_token = std::env::var("PROXY_APP_TOKEN")
+        .unwrap_or_else(|_| option_env!("PROXY_APP_TOKEN").unwrap_or("").to_string());
 
     let db_path = dirs_next::data_local_dir()
         .unwrap_or_else(|| std::path::PathBuf::from("."))
