@@ -2,6 +2,7 @@ import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { listDriveFiles, listDriveFilesRecursive, listSharedDrives, openDriveFile } from "@/lib/tauri";
 import { useUIStore } from "@/store/uiStore";
+import { setDriveContext, clearDriveContext } from "@/lib/geminiContextBridge";
 import { useDocStore } from "@/store/docStore";
 import { cn, formatFileSize } from "@/lib/utils";
 import { 
@@ -48,6 +49,15 @@ export default function DriveView({ filterType = "drive" }: Props) {
   const setPendingFileId = useDocStore((s) => s.setPendingFileId);
 
   const [viewMode, setViewMode] = useState<"grid" | "list">("list");
+
+  useEffect(() => {
+    setDriveContext({
+      activeView: filterType ?? "drive",
+      currentFolderId: currentFolderId,
+      driveId: activeDriveId,
+    });
+    return () => clearDriveContext();
+  }, [filterType, currentFolderId, activeDriveId]);
 
   const handleSelectFile = (file: DriveFile) => {
     if (file.mimeType === MIME_TYPES.folder) return;

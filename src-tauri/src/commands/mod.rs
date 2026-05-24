@@ -6,5 +6,6 @@ pub mod drive_commands;
 pub mod fireflies_commands;
 pub mod gemini_commands;
 pub mod gemini_docs_commands;
+pub mod gemini_drive_commands;
 pub mod gmail_commands;
 pub mod slack_commands;

@@ -21,6 +21,7 @@ import type {
   ContactSuggestion,
   GeminiChatRequest,
   GeminiMessage,
+  GeminiModel,
   DriveFile,
   DriveFileListResponse,
   SharedDriveListResponse,
@@ -31,7 +32,9 @@ import type {
   SlackUser,
   FirefliesMeeting,
   FirefliesChannel,
+  DriveFileResult,
 } from "@/types";
+import type { DriveViewContext } from "@/lib/geminiContextBridge";
 
 const IS_DEV = import.meta.env.DEV;
 
@@ -242,15 +245,31 @@ export const deleteChatSpace = (spaceName: string) =>
 export const geminiChat = (request: GeminiChatRequest) =>
   loggedInvoke<string>("gemini_chat", { request });
 
-export const generateEmailReply = (threadId: string, instructions?: string) =>
-  loggedInvoke<string>("generate_email_reply", { threadId, instructions });
+export const listGeminiModels = () =>
+  loggedInvoke<GeminiModel[]>("list_gemini_models");
 
-export const organizeInbox = () => loggedInvoke<string>("organize_inbox");
+export const generateEmailReply = (threadId: string, instructions?: string, model?: string) =>
+  loggedInvoke<string>("generate_email_reply", { threadId, instructions, model });
 
-export const generateDailyReport = () => loggedInvoke<string>("generate_daily_report");
+export const organizeInbox = (model?: string) =>
+  loggedInvoke<string>("organize_inbox", { model });
 
-export const geminiChatWithSearch = (messages: GeminiMessage[], context?: string, webSearch?: boolean) =>
-  loggedInvoke<string>("gemini_chat_with_search", { messages, context, webSearch: webSearch ?? false });
+export const generateDailyReport = (model?: string) =>
+  loggedInvoke<string>("generate_daily_report", { model });
+
+export const geminiChatWithSearch = (messages: GeminiMessage[], context?: string, webSearch?: boolean, model?: string) =>
+  loggedInvoke<string>("gemini_chat_with_search", { messages, context, webSearch: webSearch ?? false, model });
+
+export interface GeminiDriveResponse {
+  text: string;
+  fileResults: DriveFileResult[];
+}
+
+export const geminiDriveChat = (
+  messages: GeminiMessage[],
+  viewContext: { activeView: string; openDocId?: string | null; openDocMimeType?: string | null; currentFolderId?: string; driveId?: string },
+  model?: string
+) => loggedInvoke<GeminiDriveResponse>("gemini_drive_chat", { messages, viewContext, model });
 
 // ── Slack ──────────────────────────────────────────────────────────────────
 
@@ -275,6 +294,9 @@ export const getSlackHistory = (channelId: string, cursor?: string, oldest?: str
 export const getSlackUser = (userId: string) =>
   loggedInvoke<SlackUser>("get_slack_user", { userId });
 
+export const getSlackFileDataUrl = (url: string) =>
+  loggedInvoke<string>("get_slack_file_data_url", { url });
+
 export const sendSlackMessage = (channelId: string, text: string) =>
   loggedInvoke<void>("send_slack_message", { channelId, text });
 
@@ -291,3 +313,12 @@ export const listFirefliesChannels = () =>
 
 export const moveFirefliesMeetings = (transcriptIds: string[], channelId: string) =>
   loggedInvoke<void>("move_fireflies_meetings", { transcriptIds, channelId });
+
+export const getFirefliesApiKeyStatus = () =>
+  loggedInvoke<boolean>("get_fireflies_api_key_status");
+
+export const setFirefliesApiKey = (apiKey: string) =>
+  loggedInvoke<void>("set_fireflies_api_key", { apiKey });
+
+export const deleteFirefliesApiKey = () =>
+  loggedInvoke<void>("delete_fireflies_api_key");

@@ -5,5 +5,6 @@ pub mod docs;
 pub mod drive;
 pub mod fireflies;
 pub mod gemini;
+pub mod gemini_tools;
 pub mod gmail;
 pub mod slack;

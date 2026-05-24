@@ -1,10 +1,12 @@
 import { useState, useRef, useEffect } from "react";
 import { motion } from "framer-motion";
-import { X, Sparkles, Send, Loader2, RefreshCw, Inbox } from "lucide-react";
+import { X, Sparkles, Send, Loader2, RefreshCw, Inbox, FileText, Table2, Layers, ExternalLink, FolderOpen, File } from "lucide-react";
 import { useUIStore } from "@/store/uiStore";
 import { useGeminiStore } from "@/store/geminiStore";
-import { geminiChat, generateEmailReply, organizeInbox, generateDailyReport } from "@/lib/tauri";
-import { getGeminiContext } from "@/lib/geminiContextBridge";
+import { geminiChat, generateEmailReply, organizeInbox, generateDailyReport, geminiDriveChat, openDriveFile } from "@/lib/tauri";
+import type { GeminiDriveResponse } from "@/lib/tauri";
+import { getGeminiContext, getDriveContext } from "@/lib/geminiContextBridge";
+import { getSelectedGeminiModel } from "@/lib/appSettings";
 import { cn } from "@/lib/utils";
 import type { GeminiMessage } from "@/types";
 
@@ -22,6 +24,7 @@ export default function GeminiDrawer({ isIntegrated }: Props) {
   
   const { chatHistory, addMessage, setLoading, isLoading, selectedEmailContext, setLastResponse } = useGeminiStore();
   const [input, setInput] = useState("");
+  const [driveFileResults, setDriveFileResults] = useState<GeminiDriveResponse["fileResults"]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -34,17 +37,42 @@ export default function GeminiDrawer({ isIntegrated }: Props) {
     addMessage(userMsg);
     setInput("");
     setLoading(true);
+    setDriveFileResults([]);
     try {
-      // Use external view context (Slack/Fireflies) if available, else fall back to email context
-      const externalCtx = (activeView === "slack" || activeView === "fireflies")
-        ? getGeminiContext()
-        : undefined;
-      const context = externalCtx ?? selectedEmailContext ?? undefined;
-      const response = await geminiChat({
-        messages: [...chatHistory, userMsg],
-        context,
-      });
-      addMessage({ role: "model", text: response });
+      const isDriveView = ["drive", "docs", "sheets", "slides"].includes(activeView);
+
+      if (isDriveView) {
+        // Use Drive-aware tool-calling path
+        const driveCtx = getDriveContext();
+        const viewContext = {
+          activeView,
+          openDocId: driveCtx?.openDocId ?? null,
+          openDocMimeType: driveCtx?.openDocMimeType ?? null,
+          currentFolderId: driveCtx?.currentFolderId,
+          driveId: driveCtx?.driveId,
+        };
+        const response = await geminiDriveChat(
+          [...chatHistory, userMsg],
+          viewContext,
+          getSelectedGeminiModel(),
+        );
+        addMessage({ role: "model", text: response.text });
+        if (response.fileResults.length > 0) {
+          setDriveFileResults(response.fileResults);
+        }
+      } else {
+        // Legacy path for mail/calendar/slack/fireflies
+        const externalCtx = (activeView === "slack" || activeView === "fireflies")
+          ? getGeminiContext()
+          : undefined;
+        const context = externalCtx ?? selectedEmailContext ?? undefined;
+        const response = await geminiChat({
+          messages: [...chatHistory, userMsg],
+          context,
+          model: getSelectedGeminiModel(),
+        });
+        addMessage({ role: "model", text: response });
+      }
     } catch (e) {
       addMessage({ role: "model", text: `Error: ${String(e)}` });
     } finally {
@@ -56,7 +84,7 @@ export default function GeminiDrawer({ isIntegrated }: Props) {
     if (!selectedThreadId || isLoading) return;
     setLoading(true);
     try {
-      const reply = await generateEmailReply(selectedThreadId);
+      const reply = await generateEmailReply(selectedThreadId, undefined, getSelectedGeminiModel());
       setLastResponse(reply);
       addMessage({ role: "model", text: `Draft reply generated:\n\n${reply}` });
     } catch (e) {
@@ -70,7 +98,7 @@ export default function GeminiDrawer({ isIntegrated }: Props) {
     if (isLoading) return;
     setLoading(true);
     try {
-      const result = await organizeInbox();
+      const result = await organizeInbox(getSelectedGeminiModel());
       addMessage({ role: "model", text: result });
     } catch (e) {
       addMessage({ role: "model", text: `Error: ${String(e)}` });
@@ -83,7 +111,7 @@ export default function GeminiDrawer({ isIntegrated }: Props) {
     if (isLoading) return;
     setLoading(true);
     try {
-      const result = await generateDailyReport();
+      const result = await generateDailyReport(getSelectedGeminiModel());
       addMessage({ role: "model", text: result });
     } catch (e) {
       addMessage({ role: "model", text: `Error: ${String(e)}` });
@@ -111,6 +139,11 @@ export default function GeminiDrawer({ isIntegrated }: Props) {
             <span className="text-[11px] font-black text-white uppercase tracking-widest block leading-tight">Gemini AI</span>
             <span className="text-[9px] font-bold text-gray-500 uppercase tracking-tighter block">Expert Assistant</span>
         </div>
+        {["drive","docs","sheets","slides"].includes(activeView) && (
+          <span className="text-[8px] font-black text-blue-500 uppercase tracking-widest px-2 py-0.5 bg-blue-500/10 rounded-full border border-blue-500/20">
+            Drive Connected
+          </span>
+        )}
         {!isIntegrated && (
           <button
             onClick={() => setGeminiOpen(false)}
@@ -173,6 +206,14 @@ export default function GeminiDrawer({ isIntegrated }: Props) {
                 </div>
                 )}
                 <div ref={messagesEndRef} />
+                {driveFileResults.length > 0 && (
+                  <div className="space-y-2 pt-2">
+                    <p className="text-[9px] font-black text-gray-600 uppercase tracking-[0.2em] px-1">Files Found</p>
+                    {driveFileResults.map((f) => (
+                      <DriveFileChip key={f.id} file={f} />
+                    ))}
+                  </div>
+                )}
             </div>
 
             <div className="border-t border-white/5 p-4 bg-transparent flex-shrink-0">
@@ -264,6 +305,40 @@ function GeminiMessageBubble({ msg }: { msg: GeminiMessage }) {
       </div>
     </div>
   );
+}
+
+function DriveFileChip({ file }: { file: { id: string; name: string; mimeType: string; webViewLink?: string; snippet?: string } }) {
+  const icon = getFileIcon(file.mimeType);
+  const handleClick = async () => {
+    if (file.webViewLink) {
+      await openDriveFile(file.webViewLink);
+    }
+  };
+  return (
+    <button
+      onClick={handleClick}
+      className="flex items-center gap-2 px-3 py-2 bg-gray-900 border border-white/10 rounded-2xl hover:border-blue-500/40 hover:shadow-[0_0_12px_rgba(59,130,246,0.15)] transition-all group w-full text-left"
+    >
+      <div className="flex-shrink-0 w-7 h-7 rounded-xl bg-gray-800 border border-white/5 flex items-center justify-center">
+        {icon}
+      </div>
+      <div className="flex-1 min-w-0">
+        <p className="text-[10px] font-black text-white uppercase tracking-tight truncate">{file.name}</p>
+        {file.snippet && (
+          <p className="text-[9px] text-gray-500 truncate mt-0.5">{file.snippet}</p>
+        )}
+      </div>
+      <ExternalLink className="w-3 h-3 text-gray-600 group-hover:text-blue-400 flex-shrink-0 transition-colors" />
+    </button>
+  );
+}
+
+function getFileIcon(mimeType: string) {
+  if (mimeType.includes("document")) return <FileText className="w-3.5 h-3.5 text-blue-400" />;
+  if (mimeType.includes("spreadsheet")) return <Table2 className="w-3.5 h-3.5 text-emerald-400" />;
+  if (mimeType.includes("presentation")) return <Layers className="w-3.5 h-3.5 text-orange-400" />;
+  if (mimeType.includes("folder")) return <FolderOpen className="w-3.5 h-3.5 text-yellow-400" />;
+  return <File className="w-3.5 h-3.5 text-gray-400" />;
 }
 
 const SUGGESTIONS = [

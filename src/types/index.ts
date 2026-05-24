@@ -290,8 +290,17 @@ export interface ChatMessagePage {
 // ── Slack ─────────────────────────────────────────────────────────────────
 
 export interface SlackProfile {
+  realName?: string;
+  realNameNormalized?: string;
+  displayName?: string;
+  displayNameNormalized?: string;
+  image48?: string;
+  image72?: string;
+  // Backward-compatible tolerance for older/stale cached shapes.
   real_name?: string;
+  real_name_normalized?: string;
   display_name?: string;
+  display_name_normalized?: string;
   image_48?: string;
   image_72?: string;
 }
@@ -299,8 +308,11 @@ export interface SlackProfile {
 export interface SlackUser {
   id: string;
   name: string;
+  realName?: string;
+  // Backward-compatible tolerance for older/stale cached shapes.
   real_name?: string;
   profile?: SlackProfile;
+  isBot?: boolean;
   is_bot?: boolean;
 }
 
@@ -317,6 +329,15 @@ export interface SlackFile {
   mimetype?: string;
   permalink?: string;
   urlPrivate?: string;
+  urlPrivateDownload?: string;
+  thumb64?: string;
+  thumb80?: string;
+  thumb160?: string;
+  thumb360?: string;
+  thumb480?: string;
+  thumb720?: string;
+  thumb960?: string;
+  thumb1024?: string;
 }
 
 export interface SlackMessage {
@@ -417,7 +438,24 @@ export interface GeminiMessage {
   text: string;
 }
 
+export interface GeminiModel {
+  name: string;
+  displayName?: string;
+  description?: string;
+  version?: string;
+  supportedGenerationMethods: string[];
+}
+
 export interface GeminiChatRequest {
   messages: GeminiMessage[];
   context?: string;
+  model?: string;
+}
+
+export interface DriveFileResult {
+  id: string;
+  name: string;
+  mimeType: string;
+  snippet?: string;
+  webViewLink?: string;
 }

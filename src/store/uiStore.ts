@@ -1,6 +1,6 @@
 import { create } from "zustand";
 
-type ActiveView = "mail" | "calendar" | "drive" | "docs" | "sheets" | "slides" | "cloud" | "admin" | "chat-test" | "slack" | "fireflies";
+type ActiveView = "mail" | "calendar" | "drive" | "docs" | "sheets" | "slides" | "cloud" | "admin" | "chat-test" | "slack" | "fireflies" | "knowledge";
 type ComposeMode = "new" | "reply" | "forward" | null;
 export type SortField = "date" | "sender";
 export type SortDir = "asc" | "desc";
@@ -9,9 +9,37 @@ export type InboxTab = "focused" | "other";
 export type ThemeKey =
   | "mm-cool-dark" | "mm-cool-light"
   | "mm-neutral-dark" | "mm-neutral-light"
-  | "mm-warm-dark" | "mm-warm-light";
+  | "mm-warm-dark" | "mm-warm-light"
+  | "mm-custom-dark" | "mm-custom-light";
 
 export type FontScale = "sm" | "md" | "lg" | "xl";
+
+const THEME_STORAGE_KEY = "misfit-gsuite:theme";
+const FONT_SCALE_STORAGE_KEY = "misfit-gsuite:font-scale";
+
+const THEME_KEYS: ThemeKey[] = [
+  "mm-cool-dark",
+  "mm-cool-light",
+  "mm-neutral-dark",
+  "mm-neutral-light",
+  "mm-warm-dark",
+  "mm-warm-light",
+  "mm-custom-dark",
+  "mm-custom-light",
+];
+
+const FONT_SCALES: FontScale[] = ["sm", "md", "lg", "xl"];
+
+function readStoredValue<T extends string>(key: string, allowed: readonly T[], fallback: T): T {
+  if (typeof window === "undefined") return fallback;
+  const value = window.localStorage.getItem(key) as T | null;
+  return value && allowed.includes(value) ? value : fallback;
+}
+
+function writeStoredValue(key: string, value: string) {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(key, value);
+}
 
 interface ComposeState {
   mode: ComposeMode;
@@ -46,6 +74,8 @@ interface UIStore {
   activeCalendarSubscriptions: boolean;
   driveCategory: "all" | "starred" | "recent" | "shared" | "shortcuts";
   driveFolderId: string;
+  openDocId: string | null;
+  openDocMimeType: string | null;
   activeDriveId?: string;
   slackChannelId: string | null;
   firefliesChannelId: string | null;
@@ -76,6 +106,7 @@ interface UIStore {
   toggleCalendarSubscriptions: () => void;
   setDriveCategory: (cat: "all" | "starred" | "recent" | "shared" | "shortcuts") => void;
   setDriveFolderId: (id: string) => void;
+  setOpenDoc: (id: string | null, mimeType?: string | null) => void;
   setActiveDriveId: (id?: string) => void;
   setSlackChannelId: (id: string | null) => void;
   setFirefliesChannelId: (id: string | null) => void;
@@ -104,11 +135,13 @@ export const useUIStore = create<UIStore>((set) => ({
   activeCalendarSubscriptions: false,
   driveCategory: "all",
   driveFolderId: "root",
+  openDocId: null,
+  openDocMimeType: null,
   activeDriveId: undefined,
   slackChannelId: null,
   firefliesChannelId: null,
-  fontScale: "md",
-  theme: "mm-neutral-dark",
+  fontScale: readStoredValue(FONT_SCALE_STORAGE_KEY, FONT_SCALES, "md"),
+  theme: readStoredValue(THEME_STORAGE_KEY, THEME_KEYS, "mm-neutral-dark"),
 
   setActiveView: (activeView) => set({ activeView }),
   setSelectedThread: (selectedThreadId) => set({ selectedThreadId }),
@@ -129,15 +162,22 @@ export const useUIStore = create<UIStore>((set) => ({
   setChatPanelWidth: (chatPanelWidth) => set({ chatPanelWidth }),
   setMailLayout: (mailLayout) => set({ mailLayout }),
   setInboxTab: (inboxTab) => set({ inboxTab, selectedThreadId: null }),
-  setTheme: (theme) => set({ theme }),
+  setTheme: (theme) => {
+    writeStoredValue(THEME_STORAGE_KEY, theme);
+    set({ theme });
+  },
   setThemePanelOpen: (themePanelOpen) => set({ themePanelOpen }),
   openEventModal: (event, initialDate) => set({ eventModalOpen: true, eventModalData: { event, initialDate: initialDate ?? null } }),
   closeEventModal: () => set({ eventModalOpen: false, eventModalData: null }),
   toggleCalendarSubscriptions: () => set((s) => ({ activeCalendarSubscriptions: !s.activeCalendarSubscriptions })),
   setDriveCategory: (driveCategory) => set({ driveCategory, driveFolderId: "root", activeDriveId: undefined }),
   setDriveFolderId: (driveFolderId) => set({ driveFolderId }),
+  setOpenDoc: (openDocId, openDocMimeType = null) => set({ openDocId, openDocMimeType }),
   setActiveDriveId: (activeDriveId) => set({ activeDriveId, driveFolderId: activeDriveId || "root", driveCategory: "all" }),
   setSlackChannelId: (slackChannelId) => set({ slackChannelId }),
   setFirefliesChannelId: (firefliesChannelId) => set({ firefliesChannelId }),
-  setFontScale: (fontScale) => set({ fontScale }),
+  setFontScale: (fontScale) => {
+    writeStoredValue(FONT_SCALE_STORAGE_KEY, fontScale);
+    set({ fontScale });
+  },
 }));

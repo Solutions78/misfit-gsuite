@@ -11,6 +11,8 @@ import TableHeader from "@tiptap/extension-table-header";
 import DOMPurify from "dompurify";
 import { cn } from "@/lib/utils";
 import { useDocStore } from "@/store/docStore";
+import { useUIStore } from "@/store/uiStore";
+import { setDriveContext, clearDriveContext } from "@/lib/geminiContextBridge";
 import {
   listDriveFiles,
   listSharedDrives,
@@ -387,6 +389,18 @@ export default function DocsView(): JSX.Element {
 
   const { activeDoc, isDirty, lastSaved, setActiveDoc, setDirty, setLastSaved, setActiveSelection, pendingFileId, setPendingFileId } =
     useDocStore();
+
+  const openDocId = useUIStore((s) => s.openDocId);
+  const openDocMimeType = useUIStore((s) => s.openDocMimeType);
+
+  useEffect(() => {
+    setDriveContext({
+      activeView: "docs",
+      openDocId: openDocId ?? undefined,
+      openDocMimeType: openDocMimeType ?? undefined,
+    });
+    return () => clearDriveContext();
+  }, [openDocId, openDocMimeType]);
 
   // ── Tiptap editor ──────────────────────────────────────────────────────────
   const editor = useEditor({

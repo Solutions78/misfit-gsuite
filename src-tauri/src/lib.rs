@@ -235,10 +235,12 @@ pub fn run() {
             commands::chat_commands::search_chat_contacts,
             commands::chat_commands::delete_chat_space,
             // Gemini
+            commands::gemini_commands::list_gemini_models,
             commands::gemini_commands::gemini_chat,
             commands::gemini_commands::generate_email_reply,
             commands::gemini_commands::organize_inbox,
             commands::gemini_commands::generate_daily_report,
+            commands::gemini_drive_commands::gemini_drive_chat,
             // Slack
             commands::slack_commands::start_slack_oauth_flow,
             commands::slack_commands::slack_exchange_code,
@@ -247,12 +249,16 @@ pub fn run() {
             commands::slack_commands::list_slack_channels,
             commands::slack_commands::get_slack_history,
             commands::slack_commands::get_slack_user,
+            commands::slack_commands::get_slack_file_data_url,
             commands::slack_commands::send_slack_message,
             // Fireflies
             commands::fireflies_commands::list_fireflies_meetings,
             commands::fireflies_commands::get_fireflies_meeting,
             commands::fireflies_commands::list_fireflies_channels,
             commands::fireflies_commands::move_fireflies_meetings,
+            commands::fireflies_commands::get_fireflies_api_key_status,
+            commands::fireflies_commands::set_fireflies_api_key,
+            commands::fireflies_commands::delete_fireflies_api_key,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
