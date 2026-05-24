@@ -1,0 +1,31 @@
+# cargo audit configuration
+# All ignored advisories are Linux-only GTK/GLib/unic bindings pulled in transitively
+# by tauri → tauri-runtime-wry → wry. On macOS, Tauri uses WKWebView, not GTK;
+# these crates are compiled in but their Linux code paths are never reached.
+# There is no Tauri 2.x release that eliminates these transitive deps.
+# Re-evaluate when Tauri upgrades its wry/tao/gtk-rs dependency tree.
+
+[advisories]
+ignore = [
+    # gtk-rs GTK3 bindings — Linux display backend; dead code on macOS
+    "RUSTSEC-2024-0411", # gdkwayland-sys
+    "RUSTSEC-2024-0412", # gdk
+    "RUSTSEC-2024-0413", # atk
+    "RUSTSEC-2024-0414", # gdkx11-sys
+    "RUSTSEC-2024-0415", # gtk
+    "RUSTSEC-2024-0416", # atk-sys
+    "RUSTSEC-2024-0417", # gdkx11
+    "RUSTSEC-2024-0418", # gdk-sys
+    "RUSTSEC-2024-0419", # gtk3-macros
+    "RUSTSEC-2024-0420", # gtk-sys
+    # glib unsoundness in VariantStrIter — Linux GLib binding; never called on macOS
+    "RUSTSEC-2024-0429", # glib
+    # proc-macro-error unmaintained — transitive via gtk3-macros (Linux GTK path)
+    "RUSTSEC-2024-0370", # proc-macro-error
+    # unic-* unmaintained — transitive via urlpattern → tauri-utils; no known exploit
+    "RUSTSEC-2025-0075", # unic-char-range
+    "RUSTSEC-2025-0080", # unic-common
+    "RUSTSEC-2025-0081", # unic-char-property
+    "RUSTSEC-2025-0098", # unic-ucd-version
+    "RUSTSEC-2025-0100", # unic-ucd-ident
+]

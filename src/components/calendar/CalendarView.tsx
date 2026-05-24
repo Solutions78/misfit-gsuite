@@ -157,7 +157,7 @@ export default function CalendarView() {
       {eventModalOpen && (
         <EventModal
           event={eventModalData?.event}
-          initialDate={eventModalData?.initialDate}
+          initialDate={eventModalData?.initialDate ?? null}
           onClose={closeEventModal}
         />
       )}

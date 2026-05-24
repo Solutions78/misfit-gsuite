@@ -1,14 +1,14 @@
 use std::sync::Arc;
 use std::time::Duration;
-use tauri::Manager;
 use tauri::{AppHandle, Emitter};
 use tokio::time::interval;
 
 use crate::AppState;
 
+#[allow(dead_code)]
 const TOKEN_REFRESH_CHECK_SECS: u64 = 60 * 4; // Check every 4 minutes
 
-/// Proactively refresh tokens before they expire so API calls never fail mid-session.
+#[allow(dead_code)]
 pub async fn start_token_refresh_scheduler(state: Arc<AppState>, app: AppHandle) {
     let mut ticker = interval(Duration::from_secs(TOKEN_REFRESH_CHECK_SECS));
     loop {
@@ -29,7 +29,7 @@ pub async fn start_token_refresh_scheduler(state: Arc<AppState>, app: AppHandle)
                 .await
                 {
                     Ok(resp) => {
-                        let mut new_token = crate::auth::oauth::token_response_to_set(
+                        match crate::auth::oauth::token_response_to_set(
                             resp,
                             Some(token.refresh_token.clone()),
                             crate::auth::oauth::UserInfo {
@@ -38,11 +38,18 @@ pub async fn start_token_refresh_scheduler(state: Arc<AppState>, app: AppHandle)
                                 name: Some(token.display_name.clone()),
                                 picture: token.picture_url.clone(),
                             },
-                        );
-                        if new_token.scopes.is_empty() {
-                            new_token.scopes = token.scopes.clone();
+                        ) {
+                            Ok(mut new_token) => {
+                                if new_token.scopes.is_empty() {
+                                    new_token.scopes = token.scopes.clone();
+                                }
+                                api.oauth_state.write().await.add_or_update(new_token);
+                            }
+                            Err(e) => {
+                                eprintln!("Token build failed: {}", e);
+                                let _ = app.emit("auth::token_expired", ());
+                            }
                         }
-                        api.oauth_state.write().await.add_or_update(new_token);
                     }
                     Err(e) => {
                         eprintln!("Token refresh failed: {}", e);

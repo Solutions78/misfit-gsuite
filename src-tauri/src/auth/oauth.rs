@@ -18,9 +18,14 @@ pub const SCOPES: &[&str] = &[
     "https://www.googleapis.com/auth/gmail.modify",
     "https://www.googleapis.com/auth/gmail.send",
     "https://www.googleapis.com/auth/calendar",
+    "https://www.googleapis.com/auth/documents",
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/presentations",
     "https://www.googleapis.com/auth/drive",
+    "https://www.googleapis.com/auth/drive.file",
     "https://www.googleapis.com/auth/cloud-platform",
     "https://www.googleapis.com/auth/admin.directory.user.readonly",
+    "https://www.googleapis.com/auth/admin.directory.group.readonly",
     "https://www.googleapis.com/auth/chat.messages",
     "https://www.googleapis.com/auth/chat.messages.create",
     "https://www.googleapis.com/auth/chat.memberships.readonly",
@@ -29,23 +34,13 @@ pub const SCOPES: &[&str] = &[
     "https://www.googleapis.com/auth/contacts.readonly",
     "https://www.googleapis.com/auth/directory.readonly",
     "https://www.googleapis.com/auth/generative-language.retriever",
-    "https://www.googleapis.com/auth/documents",
-    "https://www.googleapis.com/auth/drive.file",
+    "https://www.googleapis.com/auth/userinfo.email",
+    "https://www.googleapis.com/auth/userinfo.profile",
     "openid",
-    "email",
-    "profile",
 ];
 
 // Only enforce scopes that have been on the OAuth consent screen from day one.
-// Adding a new scope here forces every existing user to re-authenticate, so only
-// list scopes after they've been granted on the GCP consent screen.
-pub const REQUIRED_REAUTH_SCOPES: &[&str] = &[
-    "https://www.googleapis.com/auth/gmail.modify",
-    "https://www.googleapis.com/auth/gmail.send",
-    "https://www.googleapis.com/auth/calendar",
-    "https://www.googleapis.com/auth/chat.messages",
-    "https://www.googleapis.com/auth/chat.spaces.readonly",
-];
+pub const REQUIRED_REAUTH_SCOPES: &[&str] = &[];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TokenSet {
@@ -106,6 +101,13 @@ impl OAuthState {
             self.accounts.push(token);
         }
         self.current_email = Some(email);
+    }
+
+    pub fn remove(&mut self, email: &str) {
+        self.accounts.retain(|t| t.email != email);
+        if self.current_email.as_deref() == Some(email) {
+            self.current_email = self.accounts.first().map(|t| t.email.clone());
+        }
     }
 }
 
@@ -310,15 +312,17 @@ pub fn token_response_to_set(
     resp: TokenResponse,
     existing_refresh: Option<String>,
     user_info: UserInfo,
-) -> TokenSet {
-    let refresh_token = resp.refresh_token.or(existing_refresh).unwrap_or_default();
+) -> Result<TokenSet, AppError> {
+    let refresh_token = resp.refresh_token.or(existing_refresh).ok_or_else(|| {
+        AppError::Auth("No refresh token returned by Google. Re-authenticate to obtain a new token.".to_string())
+    })?;
     let expires_at = Utc::now() + Duration::seconds(resp.expires_in);
     let scopes = resp
         .scope
         .map(|s| s.split_whitespace().map(String::from).collect())
         .unwrap_or_default();
 
-    TokenSet {
+    Ok(TokenSet {
         access_token: resp.access_token,
         refresh_token,
         expires_at,
@@ -327,5 +331,5 @@ pub fn token_response_to_set(
         display_name: user_info.name.unwrap_or_default(),
         picture_url: user_info.picture,
         scopes,
-    }
+    })
 }

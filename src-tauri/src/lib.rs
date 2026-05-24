@@ -16,6 +16,8 @@ pub struct AppState {
     pub db: Mutex<Connection>,
     pub client_id: String,
     pub client_secret: String,
+    pub proxy_base: String,
+    pub proxy_app_token: String,
     pub sync_lock: Mutex<()>,
 }
 
@@ -27,10 +29,13 @@ unsafe impl Sync for AppState {}
 pub fn run() {
     dotenvy::dotenv().ok();
 
-    let client_id =
-        std::env::var("GOOGLE_CLIENT_ID").unwrap_or_else(|_| "YOUR_CLIENT_ID_HERE".to_string());
+    let client_id = std::env::var("GOOGLE_CLIENT_ID")
+        .expect("GOOGLE_CLIENT_ID environment variable must be set before starting the app");
     let client_secret = std::env::var("GOOGLE_CLIENT_SECRET")
-        .unwrap_or_else(|_| "YOUR_CLIENT_SECRET_HERE".to_string());
+        .expect("GOOGLE_CLIENT_SECRET environment variable must be set before starting the app");
+
+    let proxy_base = std::env::var("PROXY_BASE_URL").unwrap_or_default();
+    let proxy_app_token = std::env::var("PROXY_APP_TOKEN").unwrap_or_default();
 
     let db_path = dirs_next::data_local_dir()
         .unwrap_or_else(|| std::path::PathBuf::from("."))
@@ -56,10 +61,21 @@ pub fn run() {
             db: Mutex::new(conn),
             client_id: client_id.clone(),
             client_secret: client_secret.clone(),
+            proxy_base,
+            proxy_app_token,
             sync_lock: Mutex::new(()),
         })
         .setup(|app| {
             let handle = app.handle().clone();
+
+            // Give ApiClient a reference to the AppHandle so it can emit
+            // auth::token_revoked when a refresh token is rejected (400).
+            {
+                let state = app.state::<AppState>();
+                tauri::async_runtime::block_on(async {
+                    state.api.write().await.set_app_handle(handle.clone());
+                });
+            }
 
             // Restore tokens for previously logged-in accounts from keychain,
             // then start background periodic sync.
@@ -182,6 +198,7 @@ pub fn run() {
             commands::gmail_commands::drain_pending_ops,
             // Drive
             commands::drive_commands::list_drive_files,
+            commands::drive_commands::list_drive_files_recursive,
             commands::drive_commands::list_shared_drives,
             commands::drive_commands::open_drive_file,
             commands::drive_commands::create_drive_folder,
@@ -212,6 +229,20 @@ pub fn run() {
             commands::gemini_commands::generate_email_reply,
             commands::gemini_commands::organize_inbox,
             commands::gemini_commands::generate_daily_report,
+            // Slack
+            commands::slack_commands::start_slack_oauth_flow,
+            commands::slack_commands::slack_exchange_code,
+            commands::slack_commands::slack_get_token,
+            commands::slack_commands::slack_disconnect,
+            commands::slack_commands::list_slack_channels,
+            commands::slack_commands::get_slack_history,
+            commands::slack_commands::get_slack_user,
+            commands::slack_commands::send_slack_message,
+            // Fireflies
+            commands::fireflies_commands::list_fireflies_meetings,
+            commands::fireflies_commands::get_fireflies_meeting,
+            commands::fireflies_commands::list_fireflies_channels,
+            commands::fireflies_commands::move_fireflies_meetings,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

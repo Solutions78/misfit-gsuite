@@ -50,7 +50,8 @@ pub async fn start_oauth_flow(
         .map_err(|e| e.to_string())?;
     drop(api_client);
 
-    let token_set = oauth::token_response_to_set(token_resp, None, user_info);
+    let token_set = oauth::token_response_to_set(token_resp, None, user_info)
+        .map_err(|e| e.to_string())?;
     let missing_scopes = token_set.missing_required_scopes();
     if !missing_scopes.is_empty() {
         return Err(format!(
@@ -84,6 +85,20 @@ pub async fn start_oauth_flow(
 
     // Emit auth complete event
     let _ = app.emit("auth::complete", &token_set.email);
+
+    // Track session expiry (24 hours from now)
+    let expires_at_ms = (chrono::Utc::now() + chrono::Duration::hours(24))
+        .timestamp_millis();
+    {
+        let db = state.db.lock().await;
+        if let Err(e) = crate::db::queries::upsert_session_expiry(&db, &token_set.email, expires_at_ms) {
+            eprintln!("Failed to upsert session expiry: {}", e);
+        }
+    }
+    let _ = app.emit("auth::session_started", serde_json::json!({
+        "email": &token_set.email,
+        "expiresAt": expires_at_ms
+    }));
 
     Ok(AccountInfo {
         email: token_set.email,
@@ -127,6 +142,21 @@ pub async fn get_current_account(
                     .await
                     .add_or_update(token.clone());
                 let _ = app.emit("auth::restored", &token.email);
+
+                // Track session expiry (24 hours from now)
+                let expires_at_ms = (chrono::Utc::now() + chrono::Duration::hours(24))
+                    .timestamp_millis();
+                {
+                    let db = state.db.lock().await;
+                    if let Err(e) = crate::db::queries::upsert_session_expiry(&db, &token.email, expires_at_ms) {
+                        eprintln!("Failed to upsert session expiry: {}", e);
+                    }
+                }
+                let _ = app.emit("auth::session_started", serde_json::json!({
+                    "email": &token.email,
+                    "expiresAt": expires_at_ms
+                }));
+
                 return Ok(Some(AccountInfo {
                     email: token.email,
                     display_name: token.display_name,
@@ -167,6 +197,7 @@ pub async fn list_accounts(state: State<'_, AppState>) -> Result<Vec<AccountInfo
 pub async fn switch_account(
     state: State<'_, AppState>,
     email: String,
+    app: tauri::AppHandle,
 ) -> Result<AccountInfo, String> {
     // Try to load from keychain
     let token = match keychain::load_token(&email).map_err(|e| e.to_string())? {
@@ -199,6 +230,20 @@ pub async fn switch_account(
         .write()
         .await
         .add_or_update(token.clone());
+
+    // Track session expiry (24 hours from now)
+    let expires_at_ms = (chrono::Utc::now() + chrono::Duration::hours(24))
+        .timestamp_millis();
+    {
+        let db = state.db.lock().await;
+        if let Err(e) = crate::db::queries::upsert_session_expiry(&db, &token.email, expires_at_ms) {
+            eprintln!("Failed to upsert session expiry: {}", e);
+        }
+    }
+    let _ = app.emit("auth::session_started", serde_json::json!({
+        "email": &token.email,
+        "expiresAt": expires_at_ms
+    }));
 
     Ok(AccountInfo {
         email: token.email,

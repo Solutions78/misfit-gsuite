@@ -1,29 +1,25 @@
 import { useUIStore } from "@/store/uiStore";
 import MessageDetail from "./MessageDetail";
+import { Mail } from "lucide-react";
 
 function EmptyState() {
   return (
-    <div className="h-full flex items-center justify-center text-gray-400">
+    <div className="h-full flex items-center justify-center bg-gray-50">
       <div className="text-center">
-        <div className="w-16 h-16 mx-auto mb-4 bg-gray-100 rounded-full flex items-center justify-center">
-          <svg className="w-8 h-8 text-gray-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
-              d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2 2v10a2 2 0 002 2z" />
-          </svg>
+        <div className="w-20 h-20 mx-auto mb-6 bg-gray-900 border border-white/5 rounded-[32px] flex items-center justify-center shadow-2xl">
+          <Mail className="w-10 h-10 text-gray-700 animate-pulse" />
         </div>
-        <p className="text-sm">Select a conversation to read</p>
+        <p className="text-[11px] font-black text-gray-500 uppercase tracking-[0.3em]">Awaiting Data Transmission</p>
       </div>
     </div>
   );
 }
 
-// Isolated component so that selectedThreadId changes only re-render this
-// subtree — not MailView and its flex layout.
 export default function DetailPane() {
   const selectedThreadId = useUIStore((s) => s.selectedThreadId);
 
   return (
-    <div className="h-full w-full overflow-hidden">
+    <div className="h-full w-full overflow-hidden bg-gray-50">
       {selectedThreadId
         ? <MessageDetail key={selectedThreadId} threadId={selectedThreadId} />
         : <EmptyState />}

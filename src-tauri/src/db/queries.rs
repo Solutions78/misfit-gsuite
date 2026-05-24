@@ -162,7 +162,8 @@ pub fn search_cached_threads(
     query: &str,
     limit: i64,
 ) -> Result<Vec<CachedThreadSummary>, AppError> {
-    let pattern = format!("%{}%", query);
+    let escaped = query.replace('%', "\\%").replace('_', "\\_");
+    let pattern = format!("%{}%", escaped);
     let mut stmt = conn.prepare(
         "SELECT
             m.id,
@@ -188,7 +189,7 @@ pub fn search_cached_threads(
                                      id DESC
                         ) AS rn
                  FROM messages
-                 WHERE subject LIKE ?1 OR from_address LIKE ?1 OR snippet LIKE ?1
+                 WHERE subject LIKE ?1 ESCAPE '\\' OR from_address LIKE ?1 ESCAPE '\\' OR snippet LIKE ?1 ESCAPE '\\'
              )
              WHERE rn = 1
          ) rep ON m.id = rep.rep_id
@@ -223,6 +224,7 @@ pub fn search_cached_threads(
 
 // ── Body cache ─────────────────────────────────────────────────────────────
 
+#[allow(dead_code)]
 pub fn get_cached_body(conn: &Connection, msg_id: &str) -> Result<Option<String>, AppError> {
     let result = conn.query_row(
         "SELECT body_html FROM messages WHERE id = ?1",
@@ -357,6 +359,7 @@ pub fn clear_sync_state(conn: &Connection, email: &str) -> Result<(), AppError> 
     Ok(())
 }
 
+#[allow(dead_code)]
 pub fn update_watch_expiration(
     conn: &Connection,
     email: &str,
@@ -369,6 +372,7 @@ pub fn update_watch_expiration(
     Ok(())
 }
 
+#[allow(dead_code)]
 pub fn get_watch_expiration(conn: &Connection, email: &str) -> Result<Option<i64>, AppError> {
     let result = conn.query_row(
         "SELECT watch_expiration FROM sync_state WHERE account_email = ?1",
@@ -511,6 +515,7 @@ pub fn upsert_doc_cache(
     Ok(())
 }
 
+#[allow(dead_code)]
 pub fn get_doc_cache(
     conn: &Connection,
     doc_id: &str,
@@ -538,6 +543,7 @@ pub fn get_doc_cache(
     }
 }
 
+#[allow(dead_code)]
 pub fn save_doc_draft(
     conn: &Connection,
     doc_id: &str,
@@ -567,6 +573,7 @@ pub fn save_doc_draft(
     Ok(draft_id)
 }
 
+#[allow(dead_code)]
 pub fn list_unsynced_drafts(
     conn: &Connection,
 ) -> Result<Vec<(String, String, String)>, AppError> {
@@ -593,6 +600,7 @@ pub fn list_unsynced_drafts(
     Ok(results)
 }
 
+#[allow(dead_code)]
 pub fn mark_draft_synced(conn: &Connection, draft_id: &str) -> Result<(), AppError> {
     conn.execute(
         "UPDATE docs_drafts SET synced = 1 WHERE draft_id = ?1",
@@ -601,4 +609,20 @@ pub fn mark_draft_synced(conn: &Connection, draft_id: &str) -> Result<(), AppErr
     .map_err(AppError::Database)?;
 
     Ok(())
+}
+
+pub fn upsert_session_expiry(conn: &Connection, email: &str, expires_at: i64) -> Result<(), AppError> {
+    conn.execute(
+        "INSERT INTO session_expiry (email, expires_at) VALUES (?1, ?2)
+         ON CONFLICT(email) DO UPDATE SET expires_at = excluded.expires_at",
+        rusqlite::params![email, expires_at],
+    )?;
+    Ok(())
+}
+
+#[allow(dead_code)]
+pub fn get_session_expiry(conn: &Connection, email: &str) -> Result<Option<i64>, AppError> {
+    let mut stmt = conn.prepare("SELECT expires_at FROM session_expiry WHERE email = ?1")?;
+    let mut rows = stmt.query(rusqlite::params![email])?;
+    Ok(rows.next()?.map(|r| r.get::<_, i64>(0)).transpose()?)
 }

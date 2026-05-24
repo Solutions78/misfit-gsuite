@@ -82,4 +82,9 @@ CREATE TABLE IF NOT EXISTS docs_drafts (
   saved_at INTEGER NOT NULL,
   synced INTEGER NOT NULL DEFAULT 0
 );
+
+CREATE TABLE IF NOT EXISTS session_expiry (
+    email TEXT PRIMARY KEY,
+    expires_at INTEGER NOT NULL
+);
 ";

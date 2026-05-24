@@ -12,7 +12,9 @@ import {
   LayoutPanelLeft,
   LogOut,
   Mail,
+  MessageCircle,
   MessageSquare,
+  Mic2,
   Palette,
   Presentation,
   Rows2,
@@ -33,6 +35,8 @@ const APPS = [
   { id: "docs", label: "Docs", icon: FileText },
   { id: "sheets", label: "Sheets", icon: Table2 },
   { id: "slides", label: "Slides", icon: Presentation },
+  { id: "slack", label: "Slack", icon: MessageCircle },
+  { id: "fireflies", label: "Fireflies", icon: Mic2 },
 ] as const;
 
 const ADMIN_APPS = [
@@ -79,6 +83,8 @@ export default function TopNav() {
     slides: "Search presentations...",
     cloud: "Search resources...",
     admin: "Search users & groups...",
+    slack: "Search channels...",
+    fireflies: "Search meetings...",
   }[activeView as string] ?? "Search...";
 
   const openExternal = (url: string) => {
@@ -101,6 +107,7 @@ export default function TopNav() {
 
   return (
     <div
+      data-tauri-drag-region
       className="flex-shrink-0 flex items-center border-b z-30"
       style={{
         height: "56px",
@@ -152,7 +159,7 @@ export default function TopNav() {
         )}
       </nav>
 
-      <div className="flex-1" />
+      <div data-tauri-drag-region className="flex-1 h-full" />
 
       {/* Search + actions */}
       <div className="flex items-center gap-2" ref={menuRef}>

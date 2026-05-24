@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import DOMPurify from "dompurify";
 import type { EmailView } from "@/types";
 
 interface Props {
@@ -8,7 +9,7 @@ interface Props {
 
 function sanitizeHtml(raw: string): string {
   if (!raw) return "";
-  return raw
+  const layoutFixed = raw
     // Remove width/height/min-width attributes on tags entirely
     .replace(/\s+width\s*=\s*["']?\d+%?["']?/gi, "")
     .replace(/\s+height\s*=\s*["']?\d+%?["']?/gi, "")
@@ -17,6 +18,11 @@ function sanitizeHtml(raw: string): string {
     .replace(/([\s;]min-width\s*:\s*)\d+px/gi, "$110px")
     // Strip fixed px widths set at the start of a style attribute
     .replace(/(style\s*=\s*["'][^"']*\bwidth\s*:\s*)\d+px/gi, "$1100%");
+  return DOMPurify.sanitize(layoutFixed, {
+    FORBID_TAGS: ["script", "object", "embed", "form", "meta", "base"],
+    FORBID_ATTR: ["onerror", "onload", "onclick", "onmouseover", "onfocus", "onblur", "onchange", "onsubmit"],
+    FORCE_BODY: true,
+  });
 }
 
 export default function EmailBody({ view, className }: Props) {

@@ -40,7 +40,7 @@ pub async fn gemini_chat_with_search(
 
     // Build system instruction from context if provided
     let system_instruction = context.map(|ctx| Content {
-        role: "user".to_string(),
+        role: "system".to_string(),
         parts: vec![Part { text: ctx }],
     });
 

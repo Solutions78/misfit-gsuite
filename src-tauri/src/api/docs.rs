@@ -15,9 +15,18 @@ pub struct DocContent {
     pub body_json: String, // JSON string of Google Docs StructuralElement[]
 }
 
+fn validate_drive_id(id: &str) -> Result<(), AppError> {
+    if id.is_empty() || !id.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_') {
+        return Err(AppError::Auth(format!("Invalid Drive/Docs ID: {}", id)));
+    }
+    Ok(())
+}
+
 pub async fn get_document(client: &ApiClient, doc_id: &str) -> Result<DocContent, AppError> {
+    validate_drive_id(doc_id)?;
+
     let token = client.access_token().await?;
-    let url = format!("{}/{}", DOCS_BASE, doc_id);
+    let url = format!("{}/{}", DOCS_BASE, urlencoding::encode(doc_id));
 
     let resp: Value = client
         .http
@@ -63,8 +72,10 @@ pub async fn save_document(
     doc_id: &str,
     requests: Vec<Value>,
 ) -> Result<(), AppError> {
+    validate_drive_id(doc_id)?;
+
     let token = client.access_token().await?;
-    let url = format!("{}/{}:batchUpdate", DOCS_BASE, doc_id);
+    let url = format!("{}/{}:batchUpdate", DOCS_BASE, urlencoding::encode(doc_id));
 
     let body = serde_json::json!({ "requests": requests });
 
@@ -85,6 +96,10 @@ pub async fn create_document(
     title: &str,
     folder_id: Option<String>,
 ) -> Result<DocContent, AppError> {
+    if let Some(ref fid) = folder_id {
+        validate_drive_id(fid)?;
+    }
+
     let token = client.access_token().await?;
 
     // Create the document
@@ -106,6 +121,9 @@ pub async fn create_document(
         .and_then(|v| v.as_str())
         .ok_or_else(|| AppError::Other("No documentId in create response".to_string()))?
         .to_string();
+
+    // Validate the doc_id returned by the API before using it in subsequent URLs
+    validate_drive_id(&doc_id)?;
 
     let doc_title = resp
         .get("title")
@@ -132,7 +150,9 @@ pub async fn create_document(
     if let Some(fid) = folder_id {
         let move_url = format!(
             "{}/{}?addParents={}&supportsAllDrives=true",
-            DRIVE_FILES_BASE, doc_id, fid
+            DRIVE_FILES_BASE,
+            urlencoding::encode(&doc_id),
+            urlencoding::encode(&fid)
         );
         let token2 = client.access_token().await?;
         client

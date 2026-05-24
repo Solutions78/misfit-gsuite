@@ -25,6 +25,12 @@ import type {
   DriveFileListResponse,
   SharedDriveListResponse,
   DocContent,
+  SlackTokenInfo,
+  SlackChannelListResponse,
+  SlackMessageListResponse,
+  SlackUser,
+  FirefliesMeeting,
+  FirefliesChannel,
 } from "@/types";
 
 const IS_DEV = import.meta.env.DEV;
@@ -167,8 +173,11 @@ export const respondToEvent = (
 
 // ── Drive ──────────────────────────────────────────────────────────────────
 
-export const listDriveFiles = (query?: string, pageToken?: string, pageSize?: number, driveId?: string) =>
-  loggedInvoke<DriveFileListResponse>("list_drive_files", { query, pageToken, pageSize, driveId });
+export const listDriveFiles = (query?: string, pageToken?: string, pageSize?: number, driveId?: string, orderBy?: string) =>
+  loggedInvoke<DriveFileListResponse>("list_drive_files", { query, pageToken, pageSize, driveId, orderBy });
+
+export const listDriveFilesRecursive = (rootFolderId: string, mimeType: string, pageToken?: string, pageSize?: number, driveId?: string, orderBy?: string) =>
+  loggedInvoke<DriveFileListResponse>("list_drive_files_recursive", { rootFolderId, mimeType, pageToken, pageSize, driveId, orderBy });
 
 export const listSharedDrives = (pageToken?: string) =>
   loggedInvoke<SharedDriveListResponse>("list_shared_drives", { pageToken });
@@ -242,3 +251,43 @@ export const generateDailyReport = () => loggedInvoke<string>("generate_daily_re
 
 export const geminiChatWithSearch = (messages: GeminiMessage[], context?: string, webSearch?: boolean) =>
   loggedInvoke<string>("gemini_chat_with_search", { messages, context, webSearch: webSearch ?? false });
+
+// ── Slack ──────────────────────────────────────────────────────────────────
+
+export const slackGetToken = () =>
+  loggedInvoke<SlackTokenInfo | null>("slack_get_token");
+
+export const startSlackOAuthFlow = () =>
+  loggedInvoke<SlackTokenInfo>("start_slack_oauth_flow");
+
+export const slackExchangeCode = (code: string) =>
+  loggedInvoke<SlackTokenInfo>("slack_exchange_code", { code });
+
+export const slackDisconnect = () =>
+  loggedInvoke<void>("slack_disconnect");
+
+export const listSlackChannels = (cursor?: string) =>
+  loggedInvoke<SlackChannelListResponse>("list_slack_channels", { cursor });
+
+export const getSlackHistory = (channelId: string, cursor?: string, oldest?: string) =>
+  loggedInvoke<SlackMessageListResponse>("get_slack_history", { channelId, cursor, oldest });
+
+export const getSlackUser = (userId: string) =>
+  loggedInvoke<SlackUser>("get_slack_user", { userId });
+
+export const sendSlackMessage = (channelId: string, text: string) =>
+  loggedInvoke<void>("send_slack_message", { channelId, text });
+
+// ── Fireflies ─────────────────────────────────────────────────────────────
+
+export const listFirefliesMeetings = (limit?: number) =>
+  loggedInvoke<FirefliesMeeting[]>("list_fireflies_meetings", { limit });
+
+export const getFirefliesMeeting = (id: string) =>
+  loggedInvoke<FirefliesMeeting>("get_fireflies_meeting", { id });
+
+export const listFirefliesChannels = () =>
+  loggedInvoke<FirefliesChannel[]>("list_fireflies_channels");
+
+export const moveFirefliesMeetings = (transcriptIds: string[], channelId: string) =>
+  loggedInvoke<void>("move_fireflies_meetings", { transcriptIds, channelId });

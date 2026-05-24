@@ -287,6 +287,129 @@ export interface ChatMessagePage {
   nextPageToken?: string;
 }
 
+// ── Slack ─────────────────────────────────────────────────────────────────
+
+export interface SlackProfile {
+  real_name?: string;
+  display_name?: string;
+  image_48?: string;
+  image_72?: string;
+}
+
+export interface SlackUser {
+  id: string;
+  name: string;
+  real_name?: string;
+  profile?: SlackProfile;
+  is_bot?: boolean;
+}
+
+export interface SlackReaction {
+  name: string;
+  count: number;
+  users?: string[];
+}
+
+export interface SlackFile {
+  id: string;
+  name?: string;
+  title?: string;
+  mimetype?: string;
+  permalink?: string;
+  urlPrivate?: string;
+}
+
+export interface SlackMessage {
+  type?: string;
+  user?: string;
+  text?: string;
+  ts: string;
+  threadTs?: string;
+  replyCount?: number;
+  reactions?: SlackReaction[];
+  files?: SlackFile[];
+  botId?: string;
+  username?: string;
+  subtype?: string;
+}
+
+export interface SlackChannel {
+  id: string;
+  name: string;
+  isPrivate: boolean;
+  isIm: boolean;
+  isMpim: boolean;
+  isMember: boolean;
+  numMembers?: number;
+  topic?: { value?: string };
+  purpose?: { value?: string };
+}
+
+export interface SlackTeam {
+  id: string;
+  name: string;
+  domain: string;
+  icon?: { image_68?: string; image_132?: string };
+}
+
+export interface SlackTokenInfo {
+  access_token: string;
+  token_type?: string;
+  scope?: string;
+  bot_user_id?: string;
+  app_id?: string;
+  team?: SlackTeam;
+  authed_user?: { id: string; scope?: string; access_token?: string };
+}
+
+export interface SlackChannelListResponse {
+  channels: SlackChannel[];
+  next_cursor?: string;
+}
+
+export interface SlackMessageListResponse {
+  messages: SlackMessage[];
+  has_more?: boolean;
+  next_cursor?: string;
+}
+
+// ── Fireflies ─────────────────────────────────────────────────────────────
+
+export interface FirefliesSentence {
+  index: number;
+  speakerName?: string;
+  text: string;
+  startTime?: string;
+}
+
+export interface FirefliesSummary {
+  keywords?: string[];
+  actionItems?: string;
+  outline?: string;
+  overview?: string;
+  shortSummary?: string;
+}
+
+export interface FirefliesChannel {
+  id: string;
+  title: string;
+  isPrivate?: boolean;
+}
+
+export interface FirefliesMeeting {
+  id: string;
+  title?: string;
+  // Float: milliseconds since epoch (divide by 1000 for Date constructor)
+  date?: number;
+  // Float: duration in minutes
+  duration?: number;
+  participants?: string[];
+  summary?: FirefliesSummary;
+  transcript?: FirefliesSentence[];
+  videoUrl?: string;
+  channelId?: string;
+}
+
 // ── Gemini ────────────────────────────────────────────────────────────────
 
 export interface GeminiMessage {

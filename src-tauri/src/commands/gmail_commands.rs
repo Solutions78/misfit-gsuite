@@ -2,8 +2,8 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::api::gmail::{
-    self, EmailView, GmailMessage, Label, MessageBody, MessageHeader, MessagePart, SentMessage,
-    Thread, ThreadListResponse, ThreadStubPublic, ThreadSummary, ThreadSummaryPage,
+    self, EmailView, GmailMessage, Label, MessageBody, MessageHeader, MessagePart,
+    Thread, ThreadListResponse, ThreadSummary, ThreadSummaryPage,
 };
 use crate::db::queries::{self, CachedMessage, CachedThreadSummary};
 use crate::AppState;
@@ -64,7 +64,14 @@ fn extract_body_html(msg: &GmailMessage) -> Option<String> {
         if !prefer_html && mime == "text/plain" {
             if let Some(body) = &part.body {
                 if let Some(data) = &body.data {
-                    return decode(data).map(|t| format!("<pre>{}</pre>", t));
+                    return decode(data).map(|t| {
+                        let escaped = t
+                            .replace('&', "&amp;")
+                            .replace('<', "&lt;")
+                            .replace('>', "&gt;")
+                            .replace('"', "&quot;");
+                        format!("<pre>{}</pre>", escaped)
+                    });
                 }
             }
         }
@@ -292,7 +299,7 @@ async fn cache_thread_summaries(state: &AppState, summaries: Vec<ThreadSummary>,
     }
 }
 
-/// Background sync: fetch fresh summaries from API and write to DB, then emit event.
+#[allow(dead_code)]
 async fn background_sync_threads(
     state: &AppState,
     app: &AppHandle,

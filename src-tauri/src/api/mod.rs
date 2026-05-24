@@ -3,5 +3,7 @@ pub mod chat;
 pub mod client;
 pub mod docs;
 pub mod drive;
+pub mod fireflies;
 pub mod gemini;
 pub mod gmail;
+pub mod slack;

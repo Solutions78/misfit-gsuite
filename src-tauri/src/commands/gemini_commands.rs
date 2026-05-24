@@ -22,12 +22,14 @@ pub struct GeminiChatRequest {
     pub context: Option<String>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Serialize, Deserialize)]
 pub struct DailyReport {
     pub summary: String,
     pub action_items: Vec<ActionItem>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ActionItem {
     pub description: String,

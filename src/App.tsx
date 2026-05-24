@@ -40,7 +40,7 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | 
             <pre className="text-xs text-gray-600 bg-gray-50 rounded-lg p-3 overflow-auto max-h-60 whitespace-pre-wrap">
               {err.message}
               {"\n\n"}
-              {err.stack}
+              {import.meta.env.DEV && err.stack}
             </pre>
             <p className="text-xs text-gray-400 mt-3">Reload the app with ⌘R to recover.</p>
           </div>
@@ -62,6 +62,7 @@ function AppContent() {
     let unlistenComplete: (() => void) | undefined;
     let unlistenSignedOut: (() => void) | undefined;
     let unlistenRestoreFailed: (() => void) | undefined;
+    let unlistenTokenRevoked: (() => void) | undefined;
 
     const restore = async () => {
       try {
@@ -124,6 +125,16 @@ function AppContent() {
       else unlistenRestoreFailed = fn;
     });
 
+    listen<string>("auth::token_revoked", (event) => {
+      if (IS_DEV) dbg("Auth", "event: token_revoked — refresh token rejected by Google", event.payload);
+      reset();
+      setHasStoredAccount(false);
+      setAuthChecked(true);
+    }).then((fn) => {
+      if (!isMounted) fn();
+      else unlistenTokenRevoked = fn;
+    });
+
     restore();
 
     return () => {
@@ -132,6 +143,7 @@ function AppContent() {
       unlistenComplete?.();
       unlistenSignedOut?.();
       unlistenRestoreFailed?.();
+      unlistenTokenRevoked?.();
     };
   }, []);
 

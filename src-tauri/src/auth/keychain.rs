@@ -15,6 +15,7 @@ pub fn delete_token(email: &str) -> Result<(), AppError> {
     platform::delete_token(email)
 }
 
+#[allow(dead_code)]
 pub fn list_account_emails() -> Vec<String> {
     // In practice, we track known accounts via the local accounts table.
     vec![]
@@ -47,7 +48,9 @@ mod platform {
         // Delete first so we always overwrite cleanly (set_generic_password
         // fails if the item already exists with different attributes).
         match delete_generic_password(SERVICE_NAME, &key) {
-            Ok(()) | Err(_) => {}
+            Ok(()) => {}
+            Err(ref e) if e.code() == errSecItemNotFound => {}
+            Err(e) => return Err(AppError::Auth(format!("Keychain delete error: {}", e))),
         }
 
         set_generic_password(SERVICE_NAME, &key, json.as_bytes())

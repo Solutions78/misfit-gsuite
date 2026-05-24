@@ -1,15 +1,17 @@
 use std::sync::Arc;
 use std::time::Duration;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter};
 use tokio::time::interval;
 
 use crate::api::client::ApiClient;
 use crate::AppState;
 
+#[allow(dead_code)]
 const WATCH_RENEW_INTERVAL_SECS: u64 = 60 * 60 * 24 * 6; // 6 days
+#[allow(dead_code)]
 const PUBSUB_POLL_INTERVAL_SECS: u64 = 15;
 
-/// Pull messages from a Pub/Sub subscription (avoids needing public HTTPS endpoint).
+#[allow(dead_code)]
 async fn pull_pubsub(
     client: &ApiClient,
     project_id: &str,
@@ -64,6 +66,7 @@ async fn pull_pubsub(
     Ok(ack_ids)
 }
 
+#[allow(dead_code)]
 pub async fn start_gmail_push_listener(
     state: Arc<AppState>,
     app: AppHandle,
