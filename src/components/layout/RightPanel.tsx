@@ -42,6 +42,7 @@ export default function RightPanel() {
   const [replyTo, setReplyTo] = useState<ChatMessage | null>(null);
   const [attachments, setAttachments] = useState<File[]>([]);
   const [isUploading, setIsUploading] = useState(false);
+  const [sendError, setSendError] = useState<string | null>(null);
   const [popupMessage, setPopupMessage] = useState<ChatMessage | null>(null);
   const [sectionsOpen, setSectionsOpen] = useState<Record<ChatSection, boolean>>({
     dms: true,
@@ -99,12 +100,13 @@ export default function RightPanel() {
       setAttachments([]);
       setReplyTo(null);
       setIsUploading(false);
-      qc.invalidateQueries({ queryKey: ["chat-messages", selectedSpace?.name] });
+      setSendError(null);
+      qc.refetchQueries({ queryKey: ["chat-messages", selectedSpace?.name] });
       qc.invalidateQueries({ queryKey: ["spaces"] });
     },
     onError: (e) => {
       setIsUploading(false);
-      alert(`Failed to send: ${e}`);
+      setSendError(String(e));
     },
   });
 
@@ -135,6 +137,7 @@ export default function RightPanel() {
 
   const handleSend = () => {
     if (!selectedSpace || (!messageText.trim() && attachments.length === 0)) return;
+    setSendError(null);
     sendMutation.mutate({
       space: selectedSpace.name,
       text: messageText.trim(),
@@ -395,6 +398,18 @@ export default function RightPanel() {
             </div>
           )}
 
+          {sendError && (
+            <div
+              className="px-3 py-2 text-xs font-medium border-t flex items-center gap-2"
+              style={{ background: "var(--mm-bg)", borderColor: "var(--mm-border)", color: "var(--mm-error)" }}
+            >
+              <span className="flex-1 truncate">Failed to send: {sendError}</span>
+              <button onClick={() => setSendError(null)} className="flex-shrink-0 opacity-60 hover:opacity-100">
+                <X className="w-3 h-3" />
+              </button>
+            </div>
+          )}
+
           <div
             className="border-t p-3 flex items-end gap-2 flex-shrink-0"
             style={{ background: "var(--mm-bg)", borderColor: "var(--mm-border)" }}
@@ -422,7 +437,7 @@ export default function RightPanel() {
                 }}
                 placeholder="Type a message…"
                 value={messageText}
-                onChange={(e) => setMessageText(e.target.value)}
+                onChange={(e) => { setMessageText(e.target.value); if (sendError) setSendError(null); }}
                 onKeyDown={(e) => {
                   if (e.key === "Enter" && !e.shiftKey) {
                     e.preventDefault();
