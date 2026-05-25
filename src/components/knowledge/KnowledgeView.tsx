@@ -126,8 +126,9 @@ export default function KnowledgeView() {
   const [showGemini, setShowGemini] = useState(true);
   const [showEntity, setShowEntity] = useState(true);
 
-  // Hover tooltip
+  // Hover tooltip — track real mouse position independently (Three.js events don't reliably carry clientX/Y)
   const [hovered, setHovered] = useState<{ node: GraphNode; x: number; y: number } | null>(null);
+  const mousePos = useRef({ x: 0, y: 0 });
 
   // Crawl state
   const [crawling, setCrawling] = useState(false);
@@ -144,6 +145,13 @@ export default function KnowledgeView() {
     });
     ro.observe(containerRef.current);
     return () => ro.disconnect();
+  }, []);
+
+  // Track real mouse coordinates for tooltip positioning
+  useEffect(() => {
+    const onMove = (e: MouseEvent) => { mousePos.current = { x: e.clientX, y: e.clientY }; };
+    window.addEventListener("mousemove", onMove);
+    return () => window.removeEventListener("mousemove", onMove);
   }, []);
 
   const { data: status } = useQuery<KgStatusResponse>({
@@ -188,10 +196,10 @@ export default function KnowledgeView() {
     }
   }, []);
 
-  const handleNodeHover = useCallback((node: object | null, _prev: object | null, event?: MouseEvent) => {
+  const handleNodeHover = useCallback((node: object | null) => {
     if (!node) { setHovered(null); return; }
     const n = node as GraphNode;
-    setHovered({ node: n, x: event?.clientX ?? 0, y: event?.clientY ?? 0 });
+    setHovered({ node: n, x: mousePos.current.x, y: mousePos.current.y });
   }, []);
 
   // Fetch shared drive names for the filter dropdown
@@ -419,8 +427,8 @@ export default function KnowledgeView() {
         {/* Hover tooltip */}
         {hovered && (
           <div
-            className="absolute pointer-events-none z-50 max-w-[240px] bg-gray-900 border border-white/10 rounded-2xl px-3 py-2 shadow-xl"
-            style={{ left: hovered.x + 12, top: hovered.y - 40 }}
+            className="fixed pointer-events-none z-50 max-w-[240px] bg-gray-900 border border-white/10 rounded-2xl px-3 py-2 shadow-xl"
+            style={{ left: hovered.x + 16, top: hovered.y - 8 }}
           >
             <p className="text-[11px] font-black text-white truncate">{hovered.node.name}</p>
             {hovered.node.__kg.summary && (
