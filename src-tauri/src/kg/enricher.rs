@@ -24,7 +24,7 @@ pub async fn run_enrichment_batch(
         // ── 1. Get a batch of pending nodes ───────────────────────────────
         let batch = {
             let conn = db.lock().await;
-            kg_queries::list_nodes_pending_enrichment(&conn, 10)?
+            kg_queries::list_nodes_pending_enrichment(&conn, 50)?
         };
 
         // ── 2. Empty batch → done ─────────────────────────────────────────
@@ -122,7 +122,7 @@ pub async fn run_enrichment_batch(
             }
 
             // Rate-limit: 1 second between files (60 RPM)
-            sleep(Duration::from_secs(1)).await;
+            sleep(Duration::from_millis(200)).await;
         }
 
         // ── 5 & 6. Update enriched_files count and emit progress ──────────
@@ -137,7 +137,7 @@ pub async fn run_enrichment_batch(
         }
 
         // ── 7. Sleep between batches ──────────────────────────────────────
-        sleep(Duration::from_secs(2)).await;
+        sleep(Duration::from_millis(500)).await;
     }
 
     Ok(())
