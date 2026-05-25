@@ -9,12 +9,14 @@ import {
   ExternalLink,
   FileText,
   HardDrive,
+  KeyRound,
   LayoutPanelLeft,
   LogOut,
   Mail,
   MessageCircle,
   MessageSquare,
   Mic2,
+  Network,
   Palette,
   Presentation,
   Rows2,
@@ -27,6 +29,8 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import appIcon from "@/assets/app-icon.png";
+import IntegrationsSettings from "@/components/settings/IntegrationsSettings";
+import { OPEN_INTEGRATIONS_SETTINGS_EVENT } from "@/lib/appSettings";
 
 const APPS = [
   { id: "mail", label: "Mail", icon: Mail },
@@ -37,6 +41,7 @@ const APPS = [
   { id: "slides", label: "Slides", icon: Presentation },
   { id: "slack", label: "Slack", icon: MessageCircle },
   { id: "fireflies", label: "Fireflies", icon: Mic2 },
+  { id: "knowledge", label: "Knowledge", icon: Network },
 ] as const;
 
 const ADMIN_APPS = [
@@ -58,6 +63,7 @@ export default function TopNav() {
 
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [accountOpen, setAccountOpen] = useState(false);
+  const [integrationsOpen, setIntegrationsOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -70,6 +76,17 @@ export default function TopNav() {
 
     document.addEventListener("mousedown", closeMenus);
     return () => document.removeEventListener("mousedown", closeMenus);
+  }, []);
+
+  useEffect(() => {
+    const openIntegrations = () => {
+      setIntegrationsOpen(true);
+      setSettingsOpen(false);
+      setAccountOpen(false);
+    };
+
+    window.addEventListener(OPEN_INTEGRATIONS_SETTINGS_EVENT, openIntegrations);
+    return () => window.removeEventListener(OPEN_INTEGRATIONS_SETTINGS_EVENT, openIntegrations);
   }, []);
 
   const isAdmin = currentAccount?.email?.endsWith("modularmisfits.com");
@@ -208,6 +225,15 @@ export default function TopNav() {
                 }}
               />
               <MenuButton
+                icon={KeyRound}
+                label="Integrations"
+                detail="Fireflies key and Gemini model"
+                onClick={() => {
+                  setIntegrationsOpen(true);
+                  setSettingsOpen(false);
+                }}
+              />
+              <MenuButton
                 icon={MessageSquare}
                 label="Messaging panel"
                 detail="Show or hide Google Chat"
@@ -303,6 +329,7 @@ export default function TopNav() {
           )}
         </div>
       </div>
+      <IntegrationsSettings open={integrationsOpen} onClose={() => setIntegrationsOpen(false)} />
     </div>
   );
 }

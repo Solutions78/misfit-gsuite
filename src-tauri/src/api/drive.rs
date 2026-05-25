@@ -62,7 +62,10 @@ pub async fn list_files(
     );
 
     if let Some(id) = drive_id {
-        url.push_str(&format!("&corpora=drive&driveId={}", urlencoding::encode(id)));
+        url.push_str(&format!(
+            "&corpora=drive&driveId={}",
+            urlencoding::encode(id)
+        ));
     }
 
     if let Some(q) = query {
@@ -109,7 +112,7 @@ pub async fn get_descendant_folders(
     while let Some(current_id) = queue.pop_front() {
         let q = format!("'{}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false", current_id);
         let resp = list_files(client, Some(&q), None, 100, drive_id, None).await?;
-        
+
         for file in resp.files {
             if !all_folder_ids.contains(&file.id) {
                 all_folder_ids.push(file.id.clone());
@@ -136,10 +139,16 @@ pub async fn list_files_recursive(
     drive_id: Option<&str>,
     order_by: Option<&str>,
 ) -> Result<DriveFileListResponse, AppError> {
-    debug!("Starting recursive file search for root folder: {}", root_folder_id);
-    
+    debug!(
+        "Starting recursive file search for root folder: {}",
+        root_folder_id
+    );
+
     let folder_ids = get_descendant_folders(client, root_folder_id, drive_id).await?;
-    debug!("Recursive traversal found {} descendant folders", folder_ids.len());
+    debug!(
+        "Recursive traversal found {} descendant folders",
+        folder_ids.len()
+    );
 
     // Build the query: mimeType = '...' and ( 'id1' in parents or 'id2' in parents ... )
     // Note: Google Drive has a 100kb query limit, but with IDs we should be safe up to ~200 parents
@@ -197,4 +206,183 @@ pub async fn delete_file(client: &ApiClient, file_id: &str) -> Result<(), AppErr
     let url = format!("{}/files/{}?supportsAllDrives=true", DRIVE_BASE, file_id);
     client.delete(&url).await?;
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// KG crawl structs
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct DriveFileOwner {
+    pub display_name: Option<String>,
+    pub email_address: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct DriveFileUser {
+    pub display_name: Option<String>,
+    pub email_address: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DriveFileKg {
+    pub id: String,
+    pub name: String,
+    pub mime_type: String,
+    pub modified_time: Option<String>,
+    pub web_view_link: Option<String>,
+    pub parents: Option<Vec<String>>,
+    #[serde(default)]
+    pub drive_id: Option<String>,
+    #[serde(default)]
+    pub shared: Option<bool>,
+    #[serde(default)]
+    pub owners: Option<Vec<DriveFileOwner>>,
+    pub last_modifying_user: Option<DriveFileUser>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DriveFileKgListResponse {
+    pub files: Vec<DriveFileKg>,
+    pub next_page_token: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DriveChange {
+    pub file_id: String,
+    #[serde(default)]
+    pub removed: bool,
+    pub file: Option<DriveFileKg>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DriveChangesResponse {
+    #[serde(default)]
+    pub changes: Vec<DriveChange>,
+    pub next_page_token: Option<String>,
+    pub new_start_page_token: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
+// KG crawl functions
+// ---------------------------------------------------------------------------
+
+/// List all Drive files with extended metadata for KG crawling.
+/// Uses an expanded fields parameter to include owners and lastModifyingUser.
+pub async fn list_files_for_kg(
+    client: &ApiClient,
+    corpora: &str,          // "user" or "drive"
+    drive_id: Option<&str>, // required when corpora="drive"
+    page_token: Option<&str>,
+    page_size: u32,
+) -> Result<DriveFileKgListResponse, AppError> {
+    let token = client.access_token().await?;
+    let fields = "nextPageToken,files(id,name,mimeType,modifiedTime,webViewLink,parents,driveId,shared,owners(displayName,emailAddress),lastModifyingUser(displayName,emailAddress))";
+
+    let mut req = client
+        .http
+        .get(&format!("{}/files", DRIVE_BASE))
+        .bearer_auth(&token)
+        .query(&[
+            ("corpora", corpora),
+            ("pageSize", &page_size.to_string()),
+            ("fields", fields),
+            ("supportsAllDrives", "true"),
+            ("includeItemsFromAllDrives", "true"),
+        ]);
+
+    if let Some(did) = drive_id {
+        req = req.query(&[("driveId", did)]);
+    }
+    if let Some(pt) = page_token {
+        req = req.query(&[("pageToken", pt)]);
+    }
+
+    let resp = req
+        .send()
+        .await
+        .map_err(|e| AppError::Other(e.to_string()))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status().as_u16();
+        let msg = resp.text().await.unwrap_or_default();
+        return Err(AppError::Api { status, message: msg });
+    }
+
+    resp.json::<DriveFileKgListResponse>()
+        .await
+        .map_err(|e| AppError::Other(e.to_string()))
+}
+
+/// Get the startPageToken for the Drive Changes API.
+/// Call this after a full crawl to establish the delta sync baseline.
+pub async fn get_changes_start_token(client: &ApiClient) -> Result<String, AppError> {
+    let token = client.access_token().await?;
+    let url = format!(
+        "{}/changes/startPageToken?supportsAllDrives=true&includeItemsFromAllDrives=true",
+        DRIVE_BASE
+    );
+
+    let resp = client
+        .http
+        .get(&url)
+        .bearer_auth(&token)
+        .send()
+        .await
+        .map_err(|e| AppError::Other(e.to_string()))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status().as_u16();
+        let msg = resp.text().await.unwrap_or_default();
+        return Err(AppError::Api { status, message: msg });
+    }
+
+    let body: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| AppError::Other(e.to_string()))?;
+
+    body["startPageToken"]
+        .as_str()
+        .map(String::from)
+        .ok_or_else(|| AppError::Other("No startPageToken in Drive response".to_string()))
+}
+
+/// Fetch changes from the Drive Changes API for delta sync.
+pub async fn list_changes(
+    client: &ApiClient,
+    page_token: &str,
+) -> Result<DriveChangesResponse, AppError> {
+    let token = client.access_token().await?;
+    let fields = "nextPageToken,newStartPageToken,changes(fileId,removed,file(id,name,mimeType,modifiedTime,webViewLink,parents,driveId,shared,owners(displayName,emailAddress),lastModifyingUser(displayName,emailAddress)))";
+
+    let resp = client
+        .http
+        .get(&format!("{}/changes", DRIVE_BASE))
+        .bearer_auth(&token)
+        .query(&[
+            ("pageToken", page_token),
+            ("supportsAllDrives", "true"),
+            ("includeItemsFromAllDrives", "true"),
+            ("fields", fields),
+        ])
+        .send()
+        .await
+        .map_err(|e| AppError::Other(e.to_string()))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status().as_u16();
+        let msg = resp.text().await.unwrap_or_default();
+        return Err(AppError::Api { status, message: msg });
+    }
+
+    resp.json::<DriveChangesResponse>()
+        .await
+        .map_err(|e| AppError::Other(e.to_string()))
 }

@@ -87,4 +87,57 @@ CREATE TABLE IF NOT EXISTS session_expiry (
     email TEXT PRIMARY KEY,
     expires_at INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS kg_nodes (
+    file_id            TEXT PRIMARY KEY,
+    name               TEXT NOT NULL,
+    mime_type          TEXT NOT NULL,
+    modified_time      TEXT,
+    web_view_link      TEXT,
+    parents_json       TEXT NOT NULL DEFAULT '[]',
+    drive_id           TEXT,
+    shared             INTEGER NOT NULL DEFAULT 0,
+    owners_json        TEXT NOT NULL DEFAULT '[]',
+    last_modifying_user TEXT,
+    crawled_at         INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+    enrich_status      TEXT NOT NULL DEFAULT 'pending',
+    enrich_error       TEXT,
+    enriched_at        INTEGER,
+    topic_tags_json    TEXT,
+    importance_score   INTEGER,
+    summary            TEXT,
+    entities_json      TEXT,
+    relationships_json TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_kg_nodes_enrich_status ON kg_nodes(enrich_status);
+CREATE INDEX IF NOT EXISTS idx_kg_nodes_mime_type ON kg_nodes(mime_type);
+CREATE INDEX IF NOT EXISTS idx_kg_nodes_drive_id ON kg_nodes(drive_id);
+
+CREATE TABLE IF NOT EXISTS kg_edges (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_id  TEXT NOT NULL REFERENCES kg_nodes(file_id) ON DELETE CASCADE,
+    target_id  TEXT NOT NULL REFERENCES kg_nodes(file_id) ON DELETE CASCADE,
+    edge_type  TEXT NOT NULL,
+    weight     REAL NOT NULL DEFAULT 1.0,
+    label      TEXT,
+    created_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_kg_edges_source ON kg_edges(source_id);
+CREATE INDEX IF NOT EXISTS idx_kg_edges_target ON kg_edges(target_id);
+
+CREATE TABLE IF NOT EXISTS kg_crawl_state (
+    id                  INTEGER PRIMARY KEY CHECK (id = 1),
+    changes_page_token  TEXT,
+    last_crawl_at       INTEGER,
+    last_delta_at       INTEGER,
+    crawl_status        TEXT NOT NULL DEFAULT 'idle',
+    total_files         INTEGER NOT NULL DEFAULT 0,
+    crawled_files       INTEGER NOT NULL DEFAULT 0,
+    enriched_files      INTEGER NOT NULL DEFAULT 0,
+    error_message       TEXT
+);
+
+INSERT OR IGNORE INTO kg_crawl_state (id) VALUES (1);
 ";

@@ -1,3 +1,4 @@
+pub mod kg_queries;
 pub mod queries;
 pub mod schema;
 
@@ -13,10 +14,16 @@ pub fn initialize(conn: &Connection) -> Result<(), AppError> {
 /// Apply sequential schema migrations. Each migration is recorded in
 /// schema_migrations so it only runs once per database file.
 fn run_migrations(conn: &Connection) -> Result<(), AppError> {
-    let migrations: &[(&str, &str)] = &[(
-        "001_add_date_header",
-        "ALTER TABLE messages ADD COLUMN date_header TEXT",
-    )];
+    let migrations: &[(&str, &str)] = &[
+        (
+            "001_add_date_header",
+            "ALTER TABLE messages ADD COLUMN date_header TEXT",
+        ),
+        (
+            "002_add_kg_tables",
+            "SELECT 1", // kg_nodes, kg_edges, kg_crawl_state created via SCHEMA constant
+        ),
+    ];
 
     for (name, sql) in migrations {
         // Skip if already applied

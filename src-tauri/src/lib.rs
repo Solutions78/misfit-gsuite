@@ -4,6 +4,7 @@ mod background;
 mod commands;
 mod db;
 mod error;
+mod kg;
 
 use rusqlite::Connection;
 use tauri::{Emitter, Manager};
@@ -173,6 +174,11 @@ pub fn run() {
                         }
                     }
                 });
+
+                let kg_handle = handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    background::scheduler::start_kg_nightly_scheduler(kg_handle).await;
+                });
             });
 
             Ok(())
@@ -259,6 +265,11 @@ pub fn run() {
             commands::fireflies_commands::get_fireflies_api_key_status,
             commands::fireflies_commands::set_fireflies_api_key,
             commands::fireflies_commands::delete_fireflies_api_key,
+            // Knowledge Graph
+            commands::kg_commands::start_kg_crawl,
+            commands::kg_commands::get_kg_status,
+            commands::kg_commands::get_kg_graph,
+            commands::kg_commands::get_kg_node,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

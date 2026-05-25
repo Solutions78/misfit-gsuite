@@ -33,6 +33,9 @@ import type {
   FirefliesMeeting,
   FirefliesChannel,
   DriveFileResult,
+  KgStatusResponse,
+  KgGraphPayload,
+  KgNode,
 } from "@/types";
 import type { DriveViewContext } from "@/lib/geminiContextBridge";
 
@@ -322,3 +325,17 @@ export const setFirefliesApiKey = (apiKey: string) =>
 
 export const deleteFirefliesApiKey = () =>
   loggedInvoke<void>("delete_fireflies_api_key");
+
+// ── Knowledge Graph ───────────────────────────────────────────────────────
+
+export const startKgCrawl = () =>
+  loggedInvoke<void>("start_kg_crawl");
+
+export const getKgStatus = () =>
+  loggedInvoke<KgStatusResponse>("get_kg_status");
+
+export const getKgGraph = () =>
+  loggedInvoke<KgGraphPayload>("get_kg_graph");
+
+export const getKgNode = (fileId: string) =>
+  loggedInvoke<KgNode | null>("get_kg_node", { fileId });

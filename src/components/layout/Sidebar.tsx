@@ -1,7 +1,7 @@
 import { cn } from "@/lib/utils";
 import { useUIStore } from "@/store/uiStore";
 import { useQuery } from "@tanstack/react-query";
-import { listLabels, listSlackChannels, slackGetToken, slackDisconnect, listFirefliesChannels } from "@/lib/tauri";
+import { listLabels, listSlackChannels, slackGetToken, slackDisconnect, listFirefliesChannels, getFirefliesApiKeyStatus, startKgCrawl, getKgStatus } from "@/lib/tauri";
 import {
   Inbox,
   Send,
@@ -29,6 +29,7 @@ import {
   Folder,
   Mic2,
   ExternalLink,
+  Network,
 } from "lucide-react";
 import type { GmailLabel, SlackChannel } from "@/types";
 import { useQueryClient } from "@tanstack/react-query";
@@ -111,10 +112,17 @@ export default function Sidebar() {
   const firefliesChannelId    = useUIStore((s) => s.firefliesChannelId);
   const setFirefliesChannelId = useUIStore((s) => s.setFirefliesChannelId);
 
+  const { data: firefliesKeyConfigured } = useQuery({
+    queryKey: ["fireflies-api-key-status"],
+    queryFn: getFirefliesApiKeyStatus,
+    enabled: isFireflies,
+    staleTime: 60_000,
+  });
+
   const { data: firefliesChannels, isLoading: ffChannelsLoading } = useQuery({
     queryKey: ["fireflies-channels"],
     queryFn: listFirefliesChannels,
-    enabled: isFireflies,
+    enabled: isFireflies && firefliesKeyConfigured === true,
     staleTime: 5 * 60_000,
   });
 
@@ -415,6 +423,10 @@ export default function Sidebar() {
             </div>
           )}
 
+          {activeView === "knowledge" && (
+            <KnowledgeSidebar />
+          )}
+
           {(activeView === "drive" || activeView === "docs" || activeView === "sheets" || activeView === "slides") && (
             <div className="space-y-6">
               <div className="px-2">
@@ -526,6 +538,74 @@ function SidebarBottomButton({ onClick, icon: Icon, label }: { onClick: () => vo
       <Icon className="w-4.5 h-4.5 opacity-60 group-hover:opacity-100 group-hover:text-blue-400 transition-all" />
       <span>{label}</span>
     </button>
+  );
+}
+
+function KnowledgeSidebar() {
+  const { data: kgStatus, isLoading } = useQuery({
+    queryKey: ["kg-status"],
+    queryFn: getKgStatus,
+    staleTime: 10_000,
+    refetchInterval: 10_000,
+  });
+
+  const handleStartCrawl = async () => {
+    try {
+      await startKgCrawl();
+    } catch (e) {
+      console.error("KG crawl failed to start:", e);
+    }
+  };
+
+  const status = kgStatus?.crawlStatus ?? "idle";
+  const isRunning = status === "running";
+
+  return (
+    <div className="space-y-4">
+      <div className="px-3 flex items-center gap-2">
+        <Network className="w-3.5 h-3.5 text-blue-400" />
+        <span className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em]">Knowledge Graph</span>
+      </div>
+
+      {/* Status indicator */}
+      <div className="px-3">
+        <div className="flex items-center gap-2 px-3 py-2.5 rounded-2xl bg-gray-900/40 border border-white/5">
+          <span
+            className={cn(
+              "w-2 h-2 rounded-full flex-shrink-0",
+              status === "running" ? "bg-blue-400 animate-pulse" :
+              status === "done"    ? "bg-green-500" :
+              status === "failed"  ? "bg-red-500" :
+                                     "bg-gray-600"
+            )}
+          />
+          <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest">
+            {isLoading ? "Loading..." :
+             status === "running" ? `Crawling… ${kgStatus?.crawledFiles ?? 0}/${kgStatus?.totalFiles ?? "?"}` :
+             status === "done"    ? `${kgStatus?.enrichedFiles ?? 0} nodes` :
+             status === "failed"  ? "Failed" :
+                                    "Idle"}
+          </span>
+        </div>
+      </div>
+
+      {/* Start crawl button */}
+      <div className="px-2">
+        <button
+          onClick={() => void handleStartCrawl()}
+          disabled={isRunning}
+          className={cn(
+            "w-full flex items-center justify-center gap-2 px-4 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all duration-200 active:scale-95 group shadow-xl",
+            isRunning
+              ? "bg-gray-900/40 text-gray-600 border border-white/5 cursor-not-allowed"
+              : "bg-gray-900 text-white shadow-[0_0_20px_rgba(255,255,255,0.12)] border border-white/10 hover:shadow-[0_0_30px_rgba(255,255,255,0.15)]"
+          )}
+        >
+          <Network className={cn("w-4 h-4 transition-transform", isRunning ? "text-gray-600" : "text-blue-400 group-hover:scale-110")} />
+          {isRunning ? "Crawling…" : "Start Crawl"}
+        </button>
+      </div>
+    </div>
   );
 }
 

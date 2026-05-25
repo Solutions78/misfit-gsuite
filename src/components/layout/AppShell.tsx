@@ -12,12 +12,19 @@ import DocsView from "@/components/drive/DocsView";
 import ConsoleView from "@/components/layout/ConsoleView";
 import SlackView from "@/components/slack/SlackView";
 import FirefliesView from "@/components/fireflies/FirefliesView";
+import KnowledgeView from "@/components/knowledge/KnowledgeView";
 import ComposeModal from "@/components/mail/ComposeModal";
 import GeminiButton from "@/components/gemini/GeminiButton";
 import GeminiDrawer from "@/components/gemini/GeminiDrawer";
 import ThemePanel from "@/components/layout/ThemePanel";
 import SessionTimer from "@/components/auth/SessionTimer";
 import { syncInbox, drainPendingOps } from "@/lib/tauri";
+import {
+  applyCustomThemeVariables,
+  clearCustomThemeVariables,
+  CUSTOM_THEME_CHANGED_EVENT,
+  loadCustomTheme,
+} from "@/lib/appSettings";
 import { Sparkles } from "lucide-react";
 
 export default function AppShell() {
@@ -33,19 +40,33 @@ export default function AppShell() {
   const fontScale       = useUIStore((s) => s.fontScale);
   const queryClient     = useQueryClient();
 
-  const FONT_SCALE_PX: Record<string, string> = { sm: "13px", md: "15px", lg: "17px", xl: "19px" };
+  const FONT_SCALE_FACTOR: Record<string, string> = { sm: "0.9", md: "1", lg: "1.14", xl: "1.28" };
 
   useEffect(() => {
-    document.documentElement.setAttribute("data-theme", theme);
-    if (theme.endsWith("-dark")) {
-      document.documentElement.classList.add("dark");
-    } else {
-      document.documentElement.classList.remove("dark");
-    }
+    const applyTheme = () => {
+      document.documentElement.setAttribute("data-theme", theme);
+      if (theme.startsWith("mm-custom-")) {
+        const mode = theme.endsWith("-dark") ? "dark" : "light";
+        applyCustomThemeVariables(loadCustomTheme()[mode]);
+      } else {
+        clearCustomThemeVariables();
+      }
+
+      if (theme.endsWith("-dark")) {
+        document.documentElement.classList.add("dark");
+      } else {
+        document.documentElement.classList.remove("dark");
+      }
+    };
+
+    applyTheme();
+    window.addEventListener(CUSTOM_THEME_CHANGED_EVENT, applyTheme);
+    return () => window.removeEventListener(CUSTOM_THEME_CHANGED_EVENT, applyTheme);
   }, [theme]);
 
   useEffect(() => {
-    document.documentElement.style.fontSize = FONT_SCALE_PX[fontScale] ?? "15px";
+    document.documentElement.setAttribute("data-font-scale", fontScale);
+    document.documentElement.style.setProperty("--mm-font-scale", FONT_SCALE_FACTOR[fontScale] ?? "1");
   }, [fontScale]);
 
   const [draggingSidebar, setDraggingSidebar] = useState(false);
@@ -55,6 +76,7 @@ export default function AppShell() {
   const isDriveView      = activeView === "drive" || activeView === "docs" || activeView === "sheets" || activeView === "slides";
   const isSlackView      = activeView === "slack";
   const isFirefliesView  = activeView === "fireflies";
+  const isKnowledgeView  = activeView === "knowledge";
 
   // Invalidate thread list when background sync completes
   useEffect(() => {
@@ -135,6 +157,7 @@ export default function AppShell() {
           {(activeView === "cloud" || activeView === "admin") && <ConsoleView type={activeView} />}
           {activeView === "slack" && <SlackView />}
           {activeView === "fireflies" && <FirefliesView />}
+          {activeView === "knowledge" && <KnowledgeView />}
           {activeView === "chat-test" && (
             <div className="h-full flex items-center justify-center text-gray-300 font-black uppercase tracking-[0.3em] italic">
               Debug: Chat API Test
@@ -149,7 +172,7 @@ export default function AppShell() {
               onMouseDown={() => setDraggingChat(true)}
               className={`absolute left-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-blue-500/20 transition-colors z-20 ${draggingChat ? "bg-blue-500/40" : ""}`}
             />
-            {(isDriveView || isSlackView || isFirefliesView) ? (
+            {(isDriveView || isSlackView || isFirefliesView || isKnowledgeView) ? (
                <div className="h-full bg-gray-50 flex flex-col border-l border-white/5">
                   <GeminiDrawer isIntegrated />
                </div>

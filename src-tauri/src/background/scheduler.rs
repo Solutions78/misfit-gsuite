@@ -1,6 +1,6 @@
 use std::sync::Arc;
 use std::time::Duration;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 use tokio::time::interval;
 
 use crate::AppState;
@@ -56,6 +56,42 @@ pub async fn start_token_refresh_scheduler(state: Arc<AppState>, app: AppHandle)
                         let _ = app.emit("auth::token_expired", ());
                     }
                 }
+            }
+        }
+    }
+}
+
+pub async fn start_kg_nightly_scheduler(app: tauri::AppHandle) {
+    let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(60 * 60 * 24));
+    interval.tick().await; // skip first tick — don't run delta sync on app startup
+    loop {
+        interval.tick().await;
+
+        let state = app.state::<crate::AppState>();
+
+        // Only run if authenticated
+        let is_auth = {
+            let api = state.api.read().await;
+            let oauth = api.oauth_state.read().await;
+            oauth.current_token().is_some()
+        };
+        if !is_auth {
+            continue;
+        }
+
+        // Delta sync
+        {
+            let api = state.api.read().await;
+            if let Err(e) = crate::kg::crawler::run_delta_sync(&api, &state.db, &app).await {
+                eprintln!("KG nightly delta sync error: {}", e);
+            }
+        }
+
+        // Re-enrich any pending/changed files
+        {
+            let api = state.api.read().await;
+            if let Err(e) = crate::kg::enricher::run_enrichment_batch(&api, &state.db, &app).await {
+                eprintln!("KG nightly enrichment error: {}", e);
             }
         }
     }

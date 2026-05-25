@@ -188,7 +188,7 @@ async fn list_recent_drive_files(
 // fetch_doc_text  (Google Docs)
 // ---------------------------------------------------------------------------
 
-async fn fetch_doc_text(client: &ApiClient, doc_id: &str) -> Result<String, AppError> {
+pub async fn fetch_doc_text(client: &ApiClient, doc_id: &str) -> Result<String, AppError> {
     let token = client.access_token().await?;
     let url = format!("https://docs.googleapis.com/v1/documents/{}", doc_id);
 
@@ -236,7 +236,7 @@ async fn fetch_doc_text(client: &ApiClient, doc_id: &str) -> Result<String, AppE
 // fetch_sheet_text  (Google Sheets)
 // ---------------------------------------------------------------------------
 
-async fn fetch_sheet_text(client: &ApiClient, sheet_id: &str) -> Result<String, AppError> {
+pub async fn fetch_sheet_text(client: &ApiClient, sheet_id: &str) -> Result<String, AppError> {
     let token = client.access_token().await?;
     let url = format!(
         "https://sheets.googleapis.com/v4/spreadsheets/{}?includeGridData=true&fields=sheets(properties(title),data(rowData(values(formattedValue))))",
@@ -297,7 +297,7 @@ async fn fetch_sheet_text(client: &ApiClient, sheet_id: &str) -> Result<String, 
 // fetch_slides_text  (Google Slides)
 // ---------------------------------------------------------------------------
 
-async fn fetch_slides_text(client: &ApiClient, pres_id: &str) -> Result<String, AppError> {
+pub async fn fetch_slides_text(client: &ApiClient, pres_id: &str) -> Result<String, AppError> {
     let token = client.access_token().await?;
     let url = format!(
         "https://slides.googleapis.com/v1/presentations/{}",

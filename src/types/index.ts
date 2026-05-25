@@ -459,3 +459,71 @@ export interface DriveFileResult {
   snippet?: string;
   webViewLink?: string;
 }
+
+// ── Knowledge Graph ────────────────────────────────────────────────────────
+
+export interface KgEntity {
+  name: string;
+  entityType: "person" | "project" | "client" | "product" | string;
+}
+
+export interface KgRelationship {
+  targetFileId: string | null;
+  description: string;
+}
+
+export interface KgEdgeView {
+  sourceId: string;
+  targetId: string;
+  edgeType: "folder_hierarchy" | "gemini_reference" | "entity_link";
+  weight: number;
+  label?: string;
+}
+
+export interface KgNodeView {
+  fileId: string;
+  name: string;
+  mimeType: string;
+  webViewLink?: string;
+  driveId?: string;
+  topicTags: string[];
+  importanceScore?: number;
+  summary?: string;
+  entities: KgEntity[];
+}
+
+export interface KgNode {
+  fileId: string;
+  name: string;
+  mimeType: string;
+  modifiedTime?: string;
+  webViewLink?: string;
+  parentsJson: string;
+  driveId?: string;
+  shared: boolean;
+  ownersJson: string;
+  lastModifyingUser?: string;
+  crawledAt: number;
+  enrichStatus: string;
+  enrichError?: string;
+  enrichedAt?: number;
+  topicTagsJson?: string;
+  importanceScore?: number;
+  summary?: string;
+  entitiesJson?: string;
+  relationshipsJson?: string;
+}
+
+export interface KgGraphPayload {
+  nodes: KgNodeView[];
+  edges: KgEdgeView[];
+}
+
+export interface KgStatusResponse {
+  crawlStatus: "idle" | "running" | "done" | "failed";
+  totalFiles: number;
+  crawledFiles: number;
+  enrichedFiles: number;
+  lastCrawlAt?: number;
+  pendingEnrichment: number;
+}
