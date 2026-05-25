@@ -119,7 +119,6 @@ function ApiHealthSection({ open }: { open: boolean }) {
 
     // Fireflies
     try {
-      const { getFirefliesApiKeyStatus } = await import("@/lib/tauri");
       const hasKey = await getFirefliesApiKeyStatus();
       update("Fireflies", hasKey ? "ok" : "error",
         hasKey ? "API key configured" : "No API key — set one above");
