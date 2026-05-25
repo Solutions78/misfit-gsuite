@@ -122,11 +122,12 @@ pub async fn run_full_crawl(
             crawled_count += 1;
         }
 
-        // Emit progress after each page
+        // Emit progress after each page — total_files tracks running count since Drive API gives no total
         {
             let conn = db.lock().await;
             let mut state = kg_queries::get_crawl_state(&conn)?;
             state.crawled_files = crawled_count;
+            state.total_files = crawled_count;
             kg_queries::update_crawl_state(&conn, &state)?;
         }
         let _ = app.emit("kg::crawl_progress", crawled_count);

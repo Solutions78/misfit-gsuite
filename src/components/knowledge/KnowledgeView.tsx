@@ -1,9 +1,8 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Network, Play, RefreshCw, X, ExternalLink, Search } from "lucide-react";
-import { getKgGraph, getKgStatus, startKgCrawl } from "@/lib/tauri";
-import { openDriveFile } from "@/lib/tauri";
-import type { KgEdgeView, KgGraphPayload, KgNodeView, KgStatusResponse } from "@/types";
+import { getKgGraph, getKgStatus, startKgCrawl, listSharedDrives, openDriveFile } from "@/lib/tauri";
+import type { KgEdgeView, KgGraphPayload, KgNodeView, KgStatusResponse, SharedDriveListResponse } from "@/types";
 
 // Dynamic import — Three.js is large, don't block app startup
 const ForceGraph3D = React.lazy(() => import("react-force-graph-3d"));
@@ -195,6 +194,20 @@ export default function KnowledgeView() {
     setHovered({ node: n, x: event?.clientX ?? 0, y: event?.clientY ?? 0 });
   }, []);
 
+  // Fetch shared drive names for the filter dropdown
+  const { data: sharedDrivesData } = useQuery<SharedDriveListResponse>({
+    queryKey: ["shared-drives"],
+    queryFn: () => listSharedDrives(),
+    staleTime: 5 * 60_000,
+  });
+
+  // Map driveId → human name
+  const driveNameMap = React.useMemo<Map<string, string>>(() => {
+    const m = new Map<string, string>();
+    sharedDrivesData?.drives.forEach((d) => m.set(d.id, d.name));
+    return m;
+  }, [sharedDrivesData]);
+
   // Derive filter options from graph data
   const allTopics = React.useMemo(() => {
     if (!graph) return [];
@@ -203,14 +216,18 @@ export default function KnowledgeView() {
     return Array.from(set).sort();
   }, [graph]);
 
+  // Unique driveIds present in the graph, with resolved names
   const allDrives = React.useMemo(() => {
-    if (!graph) return [];
+    if (!graph) return [] as { id: string; name: string }[];
     const map = new Map<string, string>();
     graph.nodes.forEach((n) => {
-      if (n.driveId) map.set(n.driveId, n.driveId);
+      if (n.driveId) {
+        const name = driveNameMap.get(n.driveId) ?? n.driveId;
+        map.set(n.driveId, name);
+      }
     });
-    return Array.from(map.keys());
-  }, [graph]);
+    return Array.from(map.entries()).map(([id, name]) => ({ id, name }));
+  }, [graph, driveNameMap]);
 
   const graphData = React.useMemo(() => {
     if (!graph) return { nodes: [], links: [] };
@@ -234,17 +251,22 @@ export default function KnowledgeView() {
         {/* Status badge */}
         {status && (
           <div className="flex items-center gap-2 text-[10px] text-gray-400 font-mono">
-            {status.crawlStatus === "running" && (
+            {(status.crawlStatus as string) === "running" && (
               <RefreshCw size={11} className="animate-spin text-blue-400" />
             )}
-            {status.crawledFiles > 0 && (
+            {status.totalFiles > 0 && (status.crawlStatus as string) === "running" && (
+              <span className="text-blue-300">
+                Crawling {status.crawledFiles.toLocaleString()} / {status.totalFiles.toLocaleString()}
+              </span>
+            )}
+            {status.crawledFiles > 0 && (status.crawlStatus as string) !== "running" && (
               <span>
-                {status.enrichedFiles.toLocaleString()} / {status.crawledFiles.toLocaleString()} enriched
+                {status.crawledFiles.toLocaleString()} indexed · {status.enrichedFiles.toLocaleString()} enriched
               </span>
             )}
             {status.pendingEnrichment > 0 && (
               <span className="text-yellow-400">
-                {status.pendingEnrichment} pending
+                · {status.pendingEnrichment.toLocaleString()} enriching
               </span>
             )}
           </div>
@@ -305,7 +327,7 @@ export default function KnowledgeView() {
               className="bg-gray-900 border border-white/5 rounded-2xl px-3 py-1 text-[11px] text-gray-300 outline-none"
             >
               <option value="">All Drives</option>
-              {allDrives.map((d) => <option key={d} value={d}>{d}</option>)}
+              {allDrives.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
             </select>
           )}
 
