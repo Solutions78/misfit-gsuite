@@ -9,4 +9,6 @@ pub mod gemini_docs_commands;
 pub mod gemini_drive_commands;
 pub mod gmail_commands;
 pub mod kg_commands;
+pub mod log_commands;
+pub mod setup_commands;
 pub mod slack_commands;

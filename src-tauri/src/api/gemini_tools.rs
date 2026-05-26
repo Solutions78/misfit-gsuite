@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -86,10 +88,18 @@ async fn search_drive_files(
     }
 
     let limit = max_results.unwrap_or(10).min(20);
-    let drive_files =
-        drive::list_files(client, Some(&q), None, limit, None, Some("modifiedTime desc")).await?;
+    let drive_files = drive::list_files(
+        client,
+        Some(&q),
+        None,
+        limit,
+        None,
+        Some("modifiedTime desc"),
+    )
+    .await?;
 
-    let files: Vec<DriveFileResult> = drive_files.files
+    let files: Vec<DriveFileResult> = drive_files
+        .files
         .into_iter()
         .map(|f| DriveFileResult {
             id: f.id,
@@ -166,7 +176,8 @@ async fn list_recent_drive_files(
     )
     .await?;
 
-    let files: Vec<DriveFileResult> = drive_files.files
+    let files: Vec<DriveFileResult> = drive_files
+        .files
         .into_iter()
         .map(|f| DriveFileResult {
             id: f.id,
@@ -275,9 +286,7 @@ pub async fn fetch_sheet_text(client: &ApiClient, sheet_id: &str) -> Result<Stri
                             if let Some(values) = row["values"].as_array() {
                                 let cells: Vec<&str> = values
                                     .iter()
-                                    .map(|v| {
-                                        v["formattedValue"].as_str().unwrap_or("")
-                                    })
+                                    .map(|v| v["formattedValue"].as_str().unwrap_or(""))
                                     .collect();
                                 output.push_str(&cells.join("\t"));
                                 output.push('\n');
@@ -299,10 +308,7 @@ pub async fn fetch_sheet_text(client: &ApiClient, sheet_id: &str) -> Result<Stri
 
 pub async fn fetch_slides_text(client: &ApiClient, pres_id: &str) -> Result<String, AppError> {
     let token = client.access_token().await?;
-    let url = format!(
-        "https://slides.googleapis.com/v1/presentations/{}",
-        pres_id
-    );
+    let url = format!("https://slides.googleapis.com/v1/presentations/{}", pres_id);
 
     let resp = client
         .http
@@ -327,14 +333,11 @@ pub async fn fetch_slides_text(client: &ApiClient, pres_id: &str) -> Result<Stri
 
             if let Some(elements) = slide["pageElements"].as_array() {
                 for element in elements {
-                    if let Some(text_elements) =
-                        element.pointer("/shape/text/textElements")
-                    {
+                    if let Some(text_elements) = element.pointer("/shape/text/textElements") {
                         if let Some(te_arr) = text_elements.as_array() {
                             for te in te_arr {
-                                if let Some(content) = te
-                                    .pointer("/textRun/content")
-                                    .and_then(|v| v.as_str())
+                                if let Some(content) =
+                                    te.pointer("/textRun/content").and_then(|v| v.as_str())
                                 {
                                     if !content.trim().is_empty() {
                                         slide_parts.push(content.to_string());

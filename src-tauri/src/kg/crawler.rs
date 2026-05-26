@@ -1,18 +1,16 @@
 use tauri::{AppHandle, Emitter};
 use tokio::sync::Mutex;
+use tracing::info;
 
 use crate::api::client::ApiClient;
 use crate::api::drive;
-use crate::db::kg_queries::{self, KgNode};
+use crate::db::kg_queries::{self, KgCrawlState, KgNode};
 use crate::error::AppError;
 
 // ── Conversion helper ─────────────────────────────────────────────────────
 
 fn drive_file_to_kg_node(f: &drive::DriveFileKg) -> KgNode {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs() as i64;
+    let now = now_secs();
 
     let parents_json = serde_json::to_string(&f.parents.as_deref().unwrap_or(&[]))
         .unwrap_or_else(|_| "[]".to_string());
@@ -59,142 +57,115 @@ fn drive_file_to_kg_node(f: &drive::DriveFileKg) -> KgNode {
 
 // ── Full crawl ────────────────────────────────────────────────────────────
 
-/// Crawl all of My Drive and every shared drive, upsert each file as a
-/// KgNode, write folder-hierarchy edges, then record the Changes API
-/// start-page-token so future calls can use delta sync.
 pub async fn run_full_crawl(
     api: &ApiClient,
     db: &Mutex<rusqlite::Connection>,
     app: &AppHandle,
 ) -> Result<(), AppError> {
-    let now_secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs() as i64;
-
-    // Mark crawl as running
-    {
+    let mut state = {
         let conn = db.lock().await;
-        let mut state = kg_queries::get_crawl_state(&conn)?;
+        kg_queries::get_crawl_state(&conn)?
+    };
+
+    // If already done, don't re-run full crawl unless forced (this fn is for the background resume)
+    if state.crawl_status == "done" && state.changes_page_token.is_some() {
+        return Ok(());
+    }
+
+    info!(
+        "KG Crawler: Starting/Resuming full crawl. Current status: {}",
+        state.crawl_status
+    );
+
+    // Initialize state if idle
+    if state.crawl_status == "idle" {
         state.crawl_status = "running".to_string();
         state.crawled_files = 0;
         state.total_files = 0;
+        state.active_drive_id = Some("user".to_string());
+        state.active_page_token = None;
+        state.last_activity_at = Some(now_secs());
+
+        let conn = db.lock().await;
         kg_queries::update_crawl_state(&conn, &state)?;
     }
-    let _ = app.emit("kg::crawl_progress", 0u64);
 
-    let mut crawled_count: i64 = 0;
+    let mut crawled_count = state.crawled_files;
 
     // ── 1. My Drive (corpora = "user") ────────────────────────────────────
-    let mut page_token: Option<String> = None;
-    loop {
-        let resp = drive::list_files_for_kg(
-            api,
-            "user",
-            None,
-            page_token.as_deref(),
-            100,
-        )
-        .await?;
+    if state.active_drive_id.as_deref() == Some("user") {
+        let mut page_token = state.active_page_token.clone();
 
-        for file in &resp.files {
-            let node = drive_file_to_kg_node(file);
-            let parents = file.parents.clone().unwrap_or_default();
-            let file_id = file.id.clone();
+        loop {
+            heartbeat(db, &mut state, crawled_count).await?;
 
-            {
-                let conn = db.lock().await;
-                kg_queries::upsert_kg_node(&conn, &node)?;
+            let resp =
+                drive::list_files_for_kg(api, "user", None, page_token.as_deref(), 100).await?;
+
+            process_batch(db, &resp.files, &mut crawled_count).await?;
+            let _ = app.emit("kg::crawl_progress", crawled_count);
+
+            match resp.next_page_token {
+                Some(token) => {
+                    page_token = Some(token.clone());
+                    state.active_page_token = Some(token);
+                }
+                None => {
+                    state.active_drive_id = Some("shared_drives_start".to_string());
+                    state.active_page_token = None;
+                    break;
+                }
             }
-
-            for parent_id in &parents {
-                let conn = db.lock().await;
-                kg_queries::insert_kg_edge(
-                    &conn,
-                    parent_id,
-                    &file_id,
-                    "folder_hierarchy",
-                    1.0,
-                    None,
-                )?;
-            }
-
-            crawled_count += 1;
-        }
-
-        // Emit progress after each page — total_files tracks running count since Drive API gives no total
-        {
-            let conn = db.lock().await;
-            let mut state = kg_queries::get_crawl_state(&conn)?;
-            state.crawled_files = crawled_count;
-            state.total_files = crawled_count;
-            kg_queries::update_crawl_state(&conn, &state)?;
-        }
-        let _ = app.emit("kg::crawl_progress", crawled_count);
-
-        match resp.next_page_token {
-            Some(token) => page_token = Some(token),
-            None => break,
         }
     }
 
     // ── 2. Shared drives ──────────────────────────────────────────────────
     let mut drives_page_token: Option<String> = None;
+
+    let mut resume_drive_id = if state.active_drive_id.as_deref() == Some("shared_drives_start") {
+        None
+    } else {
+        state.active_drive_id.clone()
+    };
+
     loop {
-        let drives_resp =
-            drive::list_shared_drives(api, drives_page_token.as_deref()).await?;
+        let drives_resp = drive::list_shared_drives(api, drives_page_token.as_deref()).await?;
 
         for shared_drive in &drives_resp.drives {
-            let drive_id = shared_drive.id.clone();
-            let mut file_page_token: Option<String> = None;
+            if let Some(ref target_id) = resume_drive_id {
+                if &shared_drive.id != target_id {
+                    continue;
+                }
+                resume_drive_id = None;
+            }
+
+            state.active_drive_id = Some(shared_drive.id.clone());
+            let mut file_page_token = state.active_page_token.clone();
 
             loop {
+                heartbeat(db, &mut state, crawled_count).await?;
+
                 let resp = drive::list_files_for_kg(
                     api,
                     "drive",
-                    Some(&drive_id),
+                    Some(&shared_drive.id),
                     file_page_token.as_deref(),
                     100,
                 )
                 .await?;
 
-                for file in &resp.files {
-                    let node = drive_file_to_kg_node(file);
-                    let parents = file.parents.clone().unwrap_or_default();
-                    let file_id = file.id.clone();
-
-                    {
-                        let conn = db.lock().await;
-                        kg_queries::upsert_kg_node(&conn, &node)?;
-                    }
-
-                    for parent_id in &parents {
-                        let conn = db.lock().await;
-                        kg_queries::insert_kg_edge(
-                            &conn,
-                            parent_id,
-                            &file_id,
-                            "folder_hierarchy",
-                            1.0,
-                            None,
-                        )?;
-                    }
-
-                    crawled_count += 1;
-                }
-
-                // Emit progress after each page
-                {
-                    let conn = db.lock().await;
-                    let mut state = kg_queries::get_crawl_state(&conn)?;
-                    state.crawled_files = crawled_count;
-                    kg_queries::update_crawl_state(&conn, &state)?;
-                }
+                process_batch(db, &resp.files, &mut crawled_count).await?;
                 let _ = app.emit("kg::crawl_progress", crawled_count);
 
                 match resp.next_page_token {
-                    Some(token) => file_page_token = Some(token),
-                    None => break,
+                    Some(token) => {
+                        file_page_token = Some(token.clone());
+                        state.active_page_token = Some(token);
+                    }
+                    None => {
+                        state.active_page_token = None;
+                        break;
+                    }
                 }
             }
         }
@@ -205,123 +176,176 @@ pub async fn run_full_crawl(
         }
     }
 
-    // ── 3. Record the Changes API start-page-token ────────────────────────
+    // ── 3. Finalize ───────────────────────────────────────────────────────
     let start_token = drive::get_changes_start_token(api).await?;
+
+    state.changes_page_token = Some(start_token);
+    state.crawl_status = "done".to_string();
+    state.last_crawl_at = Some(now_secs());
+    state.last_activity_at = Some(now_secs());
+    state.active_drive_id = None;
+    state.active_page_token = None;
+    state.crawled_files = crawled_count;
+    state.total_files = crawled_count;
 
     {
         let conn = db.lock().await;
-        let mut state = kg_queries::get_crawl_state(&conn)?;
-        state.changes_page_token = Some(start_token);
-        state.crawl_status = "done".to_string();
-        state.last_crawl_at = Some(now_secs);
-        state.crawled_files = crawled_count;
         kg_queries::update_crawl_state(&conn, &state)?;
     }
 
+    info!(
+        "KG Crawler: Full crawl complete. Files indexed: {}",
+        crawled_count
+    );
     let _ = app.emit("kg::crawl_complete", crawled_count);
     Ok(())
 }
 
+// ── Helpers ───────────────────────────────────────────────────────────────
+
+async fn heartbeat(
+    db: &Mutex<rusqlite::Connection>,
+    state: &mut KgCrawlState,
+    crawled_count: i64,
+) -> Result<(), AppError> {
+    state.last_activity_at = Some(now_secs());
+    state.crawled_files = crawled_count;
+    state.total_files = crawled_count;
+
+    let conn = db.lock().await;
+    kg_queries::update_crawl_state(&conn, state)?;
+    Ok(())
+}
+
+async fn process_batch(
+    db: &Mutex<rusqlite::Connection>,
+    files: &[drive::DriveFileKg],
+    count: &mut i64,
+) -> Result<(), AppError> {
+    let conn = db.lock().await;
+    conn.execute("BEGIN TRANSACTION", [])?;
+
+    for file in files {
+        let node = drive_file_to_kg_node(file);
+        let parents = file.parents.clone().unwrap_or_default();
+        let file_id = file.id.clone();
+
+        kg_queries::upsert_kg_node(&conn, &node)?;
+
+        for parent_id in &parents {
+            kg_queries::insert_kg_edge(&conn, parent_id, &file_id, "folder_hierarchy", 1.0, None)?;
+        }
+        *count += 1;
+    }
+
+    conn.execute("COMMIT", [])?;
+    Ok(())
+}
+
+fn now_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64
+}
+
 // ── Delta sync ────────────────────────────────────────────────────────────
 
-/// Apply incremental Drive changes since the last crawl.  Falls back to a
-/// full crawl if no start-page-token is recorded yet.
+#[allow(dead_code)]
 pub async fn run_delta_sync(
     api: &ApiClient,
     db: &Mutex<rusqlite::Connection>,
     app: &AppHandle,
 ) -> Result<(), AppError> {
-    // Read current state; fall back to full crawl if no token recorded.
-    let initial_token = {
+    let mut state = {
         let conn = db.lock().await;
-        let state = kg_queries::get_crawl_state(&conn)?;
-        state.changes_page_token.clone()
+        kg_queries::get_crawl_state(&conn)?
     };
 
-    let mut page_token = match initial_token {
+    let mut page_token = match state.changes_page_token.clone() {
         Some(t) => t,
         None => {
             return run_full_crawl(api, db, app).await;
         }
     };
 
-    let now_secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs() as i64;
+    info!("KG Crawler: Starting delta sync from token: {}", page_token);
 
-    // Mark delta as running
+    state.crawl_status = "running".to_string();
+    state.last_activity_at = Some(now_secs());
     {
         let conn = db.lock().await;
-        let mut state = kg_queries::get_crawl_state(&conn)?;
-        state.crawl_status = "running".to_string();
-        state.last_delta_at = Some(now_secs);
         kg_queries::update_crawl_state(&conn, &state)?;
     }
     let _ = app.emit("kg::crawl_progress", ());
 
     let mut new_start_token: Option<String> = None;
+    let mut processed_changes = 0;
 
-    // ── Paginate through all changes ──────────────────────────────────────
     loop {
         let resp = drive::list_changes(api, &page_token).await?;
 
-        for change in &resp.changes {
-            if change.removed {
-                let conn = db.lock().await;
-                kg_queries::delete_kg_node(&conn, &change.file_id)?;
-            } else if let Some(file) = &change.file {
-                let node = drive_file_to_kg_node(file);
-                let parents = file.parents.clone().unwrap_or_default();
-                let file_id = file.id.clone();
+        {
+            let conn = db.lock().await;
+            conn.execute("BEGIN TRANSACTION", [])?;
 
-                {
-                    let conn = db.lock().await;
+            for change in &resp.changes {
+                if change.removed {
+                    kg_queries::delete_kg_node(&conn, &change.file_id)?;
+                } else if let Some(file) = &change.file {
+                    let node = drive_file_to_kg_node(file);
+                    let parents = file.parents.clone().unwrap_or_default();
+                    let file_id = file.id.clone();
+
                     kg_queries::upsert_kg_node(&conn, &node)?;
-                }
 
-                for parent_id in &parents {
-                    let conn = db.lock().await;
-                    kg_queries::insert_kg_edge(
-                        &conn,
-                        parent_id,
-                        &file_id,
-                        "folder_hierarchy",
-                        1.0,
-                        None,
-                    )?;
+                    for parent_id in &parents {
+                        kg_queries::insert_kg_edge(
+                            &conn,
+                            parent_id,
+                            &file_id,
+                            "folder_hierarchy",
+                            1.0,
+                            None,
+                        )?;
+                    }
                 }
+                processed_changes += 1;
             }
+            conn.execute("COMMIT", [])?;
         }
 
-        // Save new_start_page_token if the API returned one (last page).
         if let Some(ref t) = resp.new_start_page_token {
             new_start_token = Some(t.clone());
         }
 
         match resp.next_page_token {
-            Some(next) => page_token = next,
+            Some(next) => {
+                page_token = next.clone();
+                state.changes_page_token = Some(next);
+                let current_crawled = state.crawled_files; // Fix borrow error
+                heartbeat(db, &mut state, current_crawled).await?;
+            }
             None => break,
         }
     }
 
-    // ── Persist updated token and mark done ───────────────────────────────
-    let final_now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs() as i64;
+    state.crawl_status = "done".to_string();
+    state.last_delta_at = Some(now_secs());
+    state.last_activity_at = Some(now_secs());
+    if let Some(t) = new_start_token {
+        state.changes_page_token = Some(t);
+    }
 
     {
         let conn = db.lock().await;
-        let mut state = kg_queries::get_crawl_state(&conn)?;
-        state.crawl_status = "done".to_string();
-        state.last_delta_at = Some(final_now);
-        if let Some(t) = new_start_token {
-            state.changes_page_token = Some(t);
-        }
         kg_queries::update_crawl_state(&conn, &state)?;
     }
 
+    info!(
+        "KG Crawler: Delta sync complete. Processed {} changes.",
+        processed_changes
+    );
     let _ = app.emit("kg::crawl_complete", ());
     Ok(())
 }

@@ -419,8 +419,31 @@ pub fn list_accounts(conn: &Connection) -> Result<Vec<(String, String, Option<St
     Ok(results)
 }
 
+/// Emails that may have usable auth material. `accounts` is the canonical
+/// table, but older builds could leave a valid Keychain token plus
+/// `session_expiry` row without an `accounts` row. Use this to heal that state.
+pub fn list_known_auth_emails(conn: &Connection) -> Result<Vec<String>, AppError> {
+    let mut stmt = conn.prepare(
+        "SELECT email FROM accounts
+         UNION
+         SELECT email FROM session_expiry
+         ORDER BY email",
+    )?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+
+    let mut results = Vec::new();
+    for row in rows {
+        results.push(row.map_err(AppError::Database)?);
+    }
+    Ok(results)
+}
+
 pub fn delete_account(conn: &Connection, email: &str) -> Result<(), AppError> {
     conn.execute("DELETE FROM accounts WHERE email = ?1", params![email])?;
+    conn.execute(
+        "DELETE FROM session_expiry WHERE email = ?1",
+        params![email],
+    )?;
     Ok(())
 }
 
@@ -520,10 +543,11 @@ pub fn get_doc_cache(
     conn: &Connection,
     doc_id: &str,
 ) -> Result<Option<(String, String, String, i64)>, AppError> {
-    let mut stmt = conn.prepare(
-        "SELECT title, revision_id, content_json, fetched_at FROM docs_cache WHERE doc_id = ?1",
-    )
-    .map_err(AppError::Database)?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT title, revision_id, content_json, fetched_at FROM docs_cache WHERE doc_id = ?1",
+        )
+        .map_err(AppError::Database)?;
 
     let mut rows = stmt
         .query_map(params![doc_id], |row| {
@@ -574,9 +598,7 @@ pub fn save_doc_draft(
 }
 
 #[allow(dead_code)]
-pub fn list_unsynced_drafts(
-    conn: &Connection,
-) -> Result<Vec<(String, String, String)>, AppError> {
+pub fn list_unsynced_drafts(conn: &Connection) -> Result<Vec<(String, String, String)>, AppError> {
     let mut stmt = conn
         .prepare(
             "SELECT draft_id, doc_id, delta_json FROM docs_drafts WHERE synced = 0 ORDER BY saved_at ASC",
@@ -611,7 +633,11 @@ pub fn mark_draft_synced(conn: &Connection, draft_id: &str) -> Result<(), AppErr
     Ok(())
 }
 
-pub fn upsert_session_expiry(conn: &Connection, email: &str, expires_at: i64) -> Result<(), AppError> {
+pub fn upsert_session_expiry(
+    conn: &Connection,
+    email: &str,
+    expires_at: i64,
+) -> Result<(), AppError> {
     conn.execute(
         "INSERT INTO session_expiry (email, expires_at) VALUES (?1, ?2)
          ON CONFLICT(email) DO UPDATE SET expires_at = excluded.expires_at",

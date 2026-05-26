@@ -23,6 +23,16 @@ fn run_migrations(conn: &Connection) -> Result<(), AppError> {
             "002_add_kg_tables",
             "SELECT 1", // kg_nodes, kg_edges, kg_crawl_state created via SCHEMA constant
         ),
+        (
+            "003_add_kg_checkpointing",
+            "ALTER TABLE kg_crawl_state ADD COLUMN active_page_token TEXT;
+             ALTER TABLE kg_crawl_state ADD COLUMN active_drive_id TEXT;
+             ALTER TABLE kg_crawl_state ADD COLUMN last_activity_at INTEGER;",
+        ),
+        (
+            "004_add_kg_error_message",
+            "ALTER TABLE kg_crawl_state ADD COLUMN error_message TEXT",
+        ),
     ];
 
     for (name, sql) in migrations {

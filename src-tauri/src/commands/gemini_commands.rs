@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
-use crate::api::gemini::{self, GeminiMessage};
+use crate::api::gemini::{self, GeminiMessage, GeminiModel};
 use crate::api::gmail;
 use crate::AppState;
 
@@ -20,6 +20,7 @@ fn build_system_prompt(name: &str, email: &str) -> String {
 pub struct GeminiChatRequest {
     pub messages: Vec<GeminiMessage>,
     pub context: Option<String>,
+    pub model: Option<String>,
 }
 
 #[allow(dead_code)]
@@ -62,9 +63,16 @@ pub async fn gemini_chat(
     }
 
     let system = build_system_prompt(&name, &email);
-    gemini::generate(&api, messages, Some(system), Some(0.7))
+    gemini::generate(&api, messages, Some(system), Some(0.7), request.model)
         .await
         .map_err(|e| e.to_string())
+}
+
+#[allow(dead_code)]
+#[tauri::command]
+pub async fn list_gemini_models(state: State<'_, AppState>) -> Result<Vec<GeminiModel>, String> {
+    let api = state.api.read().await;
+    gemini::list_models(&api).await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -72,6 +80,7 @@ pub async fn generate_email_reply(
     state: State<'_, AppState>,
     thread_id: String,
     instructions: Option<String>,
+    model: Option<String>,
 ) -> Result<String, String> {
     let api = state.api.read().await;
     let oauth = api.oauth_state.read().await;
@@ -112,13 +121,16 @@ pub async fn generate_email_reply(
         ),
     }];
 
-    gemini::generate(&api, messages, Some(system), Some(0.6))
+    gemini::generate(&api, messages, Some(system), Some(0.6), model)
         .await
         .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub async fn organize_inbox(state: State<'_, AppState>) -> Result<String, String> {
+pub async fn organize_inbox(
+    state: State<'_, AppState>,
+    model: Option<String>,
+) -> Result<String, String> {
     let api = state.api.read().await;
     let oauth = api.oauth_state.read().await;
     let (name, email) = oauth
@@ -155,13 +167,16 @@ pub async fn organize_inbox(state: State<'_, AppState>) -> Result<String, String
         ),
     }];
 
-    gemini::generate(&api, messages, Some(system), Some(0.3))
+    gemini::generate(&api, messages, Some(system), Some(0.3), model)
         .await
         .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub async fn generate_daily_report(state: State<'_, AppState>) -> Result<String, String> {
+pub async fn generate_daily_report(
+    state: State<'_, AppState>,
+    model: Option<String>,
+) -> Result<String, String> {
     let api = state.api.read().await;
     let oauth = api.oauth_state.read().await;
     let (name, email) = oauth
@@ -211,7 +226,7 @@ pub async fn generate_daily_report(state: State<'_, AppState>) -> Result<String,
         ),
     }];
 
-    gemini::generate(&api, messages, Some(system), Some(0.4))
+    gemini::generate(&api, messages, Some(system), Some(0.4), model)
         .await
         .map_err(|e| e.to_string())
 }

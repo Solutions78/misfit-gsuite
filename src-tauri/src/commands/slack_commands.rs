@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use crate::api::slack::{
     self, SlackChannelListResponse, SlackMessageListResponse, SlackTokenSet, SlackUser,
 };
@@ -53,10 +55,17 @@ async fn run_slack_callback_server() -> Result<String, AppError> {
 
     let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{}", SLACK_OAUTH_PORT))
         .await
-        .map_err(|e| AppError::Other(format!("Cannot bind Slack OAuth port {}: {}", SLACK_OAUTH_PORT, e)))?;
+        .map_err(|e| {
+            AppError::Other(format!(
+                "Cannot bind Slack OAuth port {}: {}",
+                SLACK_OAUTH_PORT, e
+            ))
+        })?;
 
     let server = axum::serve(listener, app);
-    let server_handle = tokio::spawn(async move { let _ = server.await; });
+    let server_handle = tokio::spawn(async move {
+        let _ = server.await;
+    });
 
     let code = rx
         .await
@@ -152,8 +161,7 @@ fn keychain_delete(key: &str) -> Result<(), AppError> {
 // ── Helper: load access token from keychain ───────────────────────────────────
 
 fn load_token_set() -> Result<SlackTokenSet, AppError> {
-    let json = keychain_load(SLACK_KEYCHAIN_KEY)?
-        .ok_or(AppError::NotAuthenticated)?;
+    let json = keychain_load(SLACK_KEYCHAIN_KEY)?.ok_or(AppError::NotAuthenticated)?;
     let token_set: SlackTokenSet = serde_json::from_str(&json)?;
     Ok(token_set)
 }
@@ -161,9 +169,7 @@ fn load_token_set() -> Result<SlackTokenSet, AppError> {
 // ── Tauri commands ────────────────────────────────────────────────────────────
 
 #[tauri::command]
-pub async fn start_slack_oauth_flow(
-    state: State<'_, AppState>,
-) -> Result<SlackTokenInfo, String> {
+pub async fn start_slack_oauth_flow(state: State<'_, AppState>) -> Result<SlackTokenInfo, String> {
     // Start the callback listener before opening the browser so we don't miss the redirect
     let code_future = run_slack_callback_server();
 
@@ -231,8 +237,7 @@ pub async fn slack_get_token(
     match json {
         None => Ok(None),
         Some(j) => {
-            let token_set: SlackTokenSet =
-                serde_json::from_str(&j).map_err(|e| e.to_string())?;
+            let token_set: SlackTokenSet = serde_json::from_str(&j).map_err(|e| e.to_string())?;
             Ok(Some(SlackTokenInfo {
                 team_id: token_set.team.id,
                 team_name: token_set.team.name,
@@ -287,6 +292,18 @@ pub async fn get_slack_user(
     let token_set = load_token_set().map_err(|e| e.to_string())?;
     let api = state.api.read().await;
     slack::get_user(&api.http, &token_set.access_token, &user_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn get_slack_file_data_url(
+    state: State<'_, AppState>,
+    url: String,
+) -> Result<String, String> {
+    let token_set = load_token_set().map_err(|e| e.to_string())?;
+    let api = state.api.read().await;
+    slack::fetch_file_data_url(&api.http, &token_set.access_token, &url)
         .await
         .map_err(|e| e.to_string())
 }

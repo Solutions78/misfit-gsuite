@@ -1,18 +1,19 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, type ReactNode } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { MessageCircle, Send, Hash, Lock, User, Loader2, Sparkles, ExternalLink, FileText, Image } from "lucide-react";
+import { MessageCircle, Send, Hash, Lock, User, Loader2, Sparkles, FileText, Image, ExternalLink, Download } from "lucide-react";
 import { useUIStore } from "@/store/uiStore";
 import {
   slackGetToken,
   startSlackOAuthFlow,
   listSlackChannels,
   getSlackHistory,
+  getSlackFileDataUrl,
   sendSlackMessage,
   openDriveFile,
 } from "@/lib/tauri";
 import { setGeminiContext, clearGeminiContext } from "@/lib/geminiContextBridge";
 import { useSlackUsers } from "@/hooks/useSlackUsers";
-import type { SlackMessage, SlackTokenInfo } from "@/types";
+import type { SlackFile, SlackMessage, SlackTokenInfo } from "@/types";
 
 const SLACK_CLIENT_ID = import.meta.env.VITE_SLACK_CLIENT_ID ?? "";
 const SLACK_REDIRECT_URI = "http://localhost:9005/slack/oauth2callback";
@@ -28,6 +29,7 @@ const SLACK_USER_SCOPES = [
   "im:write",
   "mpim:history",
   "mpim:read",
+  "files:read",
   "users:read",
 ].join(",");
 
@@ -68,6 +70,11 @@ function avatarColor(seed: string): string {
   return palette[h % palette.length];
 }
 
+function extractMentionUserIds(text?: string): string[] {
+  if (!text) return [];
+  return [...text.matchAll(/<@([A-Z0-9]+)(?:\|[^>]+)?>/g)].map((match) => match[1]);
+}
+
 // ── Connect screen ─────────────────────────────────────────────────────────
 
 function ConnectSlack({ onConnected }: { onConnected: () => void }) {
@@ -78,8 +85,6 @@ function ConnectSlack({ onConnected }: { onConnected: () => void }) {
     setConnecting(true);
     setError(null);
     try {
-      // Start the Rust callback listener FIRST, then open the browser.
-      // startSlackOAuthFlow() blocks until the redirect arrives on port 9005.
       const flowPromise = startSlackOAuthFlow();
       await openDriveFile(buildOAuthUrl());
       await flowPromise;
@@ -125,12 +130,9 @@ function ConnectSlack({ onConnected }: { onConnected: () => void }) {
 
 // ── Message bubble ─────────────────────────────────────────────────────────
 
-// Map common Slack emoji names to actual Unicode characters
 const EMOJI_MAP: Record<string, string> = {
-  // Thumbs — most common Slack reactions
   thumbsup: "👍", "+1": "👍",
   thumbsdown: "👎", "-1": "👎",
-  // Faces
   joy: "😂", "rolling_on_the_floor_laughing": "🤣", rofl: "🤣",
   heart_eyes: "😍", smile: "😊", laughing: "😆", grinning: "😀",
   sweat_smile: "😅", slightly_smiling_face: "🙂", slightly_frowning_face: "🙁",
@@ -141,11 +143,9 @@ const EMOJI_MAP: Record<string, string> = {
   partying_face: "🥳", sunglasses: "😎", wink: "😉", blush: "😊",
   stuck_out_tongue: "😛", stuck_out_tongue_winking_eye: "😜",
   kissing_heart: "😘", heart: "❤️", broken_heart: "💔",
-  // Hands & gestures
   clap: "👏", pray: "🙏", muscle: "💪", wave: "👋",
   ok_hand: "👌", raised_hands: "🙌", point_up: "☝️", v: "✌️",
   handshake: "🤝", open_hands: "👐", crossed_fingers: "🤞",
-  // Objects & symbols
   fire: "🔥", rocket: "🚀", eyes: "👀", star: "⭐", star2: "🌟",
   sparkles: "✨", zap: "⚡", bulb: "💡", "100": "💯", tada: "🎉",
   check: "✅", white_check_mark: "✅", x: "❌", warning: "⚠️",
@@ -160,60 +160,301 @@ const EMOJI_MAP: Record<string, string> = {
   large_yellow_circle: "🟡", large_blue_circle: "🔵",
 };
 
-// Replace :emoji_name: tokens in Slack message body text
-function renderMessageText(text: string): string {
-  return text.replace(/:([a-zA-Z0-9_\-+]+):/g, (match, name) => {
-    const resolved = resolveEmoji(name);
-    return resolved !== name ? resolved : match;
-  });
-}
-
 function resolveEmoji(name: string): string {
-  // Normalize: trim whitespace, strip any surrounding colons Slack may include
   const normalized = name.trim().replace(/^:+|:+$/g, "");
-  // Direct lookup
   const direct = EMOJI_MAP[normalized];
   if (direct) return direct;
-  // Strip skin-tone suffixes: Slack uses "::" or ":" as separator
-  // e.g. "+1::skin-tone-2" or "thumbsup:skin-tone-3"
   const base = normalized.split(/::?/)[0];
   const baseEmoji = EMOJI_MAP[base];
   if (baseEmoji) return baseEmoji;
-  // Show raw name (readable fallback, no surrounding colons)
   return normalized;
 }
 
-function FileAttachment({ file }: { file: { id: string; name?: string; title?: string; mimetype?: string; permalink?: string; urlPrivate?: string } }) {
-  const isImage = file.mimetype?.startsWith("image/");
-  const name = file.title || file.name || "Attachment";
-  const href = file.permalink || file.urlPrivate;
-  const Icon = isImage ? Image : FileText;
+function openExternalUrl(url: string) {
+  void openDriveFile(url);
+}
+
+function renderSlackEntity(raw: string, resolveUser: (id: string) => string): ReactNode {
+  if (raw.startsWith("@")) {
+    const [userId, label] = raw.slice(1).split("|");
+    return (
+      <span className="inline-flex items-center rounded-md bg-blue-500/10 px-1.5 py-0.5 font-bold text-blue-300">
+        @{label || resolveUser(userId) || userId}
+      </span>
+    );
+  }
+
+  if (raw.startsWith("#")) {
+    const [channelId, label] = raw.slice(1).split("|");
+    return (
+      <span className="inline-flex items-center rounded-md bg-white/5 px-1.5 py-0.5 font-bold text-gray-200">
+        #{label || channelId}
+      </span>
+    );
+  }
+
+  if (raw.startsWith("!")) {
+    const [special, label] = raw.slice(1).split("|");
+    const normalized = special === "channel" || special === "here" || special === "everyone"
+      ? `@${special}`
+      : label || `@${special}`;
+    return (
+      <span className="inline-flex items-center rounded-md bg-amber-500/10 px-1.5 py-0.5 font-bold text-amber-300">
+        {normalized}
+      </span>
+    );
+  }
+
+  const [url, label] = raw.split("|");
+  if (/^(https?:\/\/|mailto:)/i.test(url)) {
+    const display = label || url.replace(/^mailto:/i, "");
+    return (
+      <a
+        href={url}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="font-semibold text-blue-300 underline decoration-blue-400/40 underline-offset-4 hover:text-blue-200"
+        onClick={(e) => {
+          e.preventDefault();
+          openExternalUrl(url);
+        }}
+      >
+        {display}
+      </a>
+    );
+  }
+
+  return `<${raw}>`;
+}
+
+function SlackMessageText({ text, resolveUser }: { text: string; resolveUser: (id: string) => string }) {
+  const nodes: ReactNode[] = [];
+  const tokenPattern = /(<[^>\n]+>|:[a-zA-Z0-9_\-+]+:)/g;
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = tokenPattern.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      nodes.push(text.slice(lastIndex, match.index));
+    }
+
+    const token = match[0];
+    if (token.startsWith("<") && token.endsWith(">")) {
+      nodes.push(renderSlackEntity(token.slice(1, -1), resolveUser));
+    } else if (token.startsWith(":") && token.endsWith(":")) {
+      const emojiName = token.slice(1, -1);
+      const resolved = resolveEmoji(emojiName);
+      nodes.push(resolved !== emojiName ? resolved : token);
+    } else {
+      nodes.push(token);
+    }
+
+    lastIndex = match.index + token.length;
+  }
+
+  if (lastIndex < text.length) {
+    nodes.push(text.slice(lastIndex));
+  }
 
   return (
-    <a
-      href={href ?? "#"}
-      target="_blank"
-      rel="noopener noreferrer"
-      className="inline-flex items-center gap-2.5 px-3.5 py-2.5 rounded-2xl border border-white/10 bg-white/[0.04] hover:bg-white/[0.08] hover:border-white/20 transition-all group max-w-xs"
-      onClick={(e) => { if (!href) e.preventDefault(); }}
-    >
-      <Icon className="w-4 h-4 text-blue-400 flex-shrink-0" />
-      <span className="text-[12px] font-semibold text-gray-200 truncate">{name}</span>
-      {href && (
-        <ExternalLink className="w-3 h-3 text-gray-500 group-hover:text-gray-300 flex-shrink-0 transition-colors" />
-      )}
-    </a>
+    <p className="text-[14px] text-gray-100 leading-relaxed whitespace-pre-wrap break-words font-normal">
+      {nodes.map((node, index) => (
+        <span key={index}>{node}</span>
+      ))}
+    </p>
   );
 }
 
-function MessageBubble({ msg, username }: { msg: SlackMessage; username: string }) {
+function FileAttachment({ file }: { file: SlackFile }) {
+  const mimetype = file.mimetype || "";
+  const isImage = mimetype.startsWith("image/");
+  const isPdf = mimetype === "application/pdf";
+  const name = file.title || file.name || "Attachment";
+
+  const imageFetchUrl =
+    file.thumb1024 ||
+    file.thumb960 ||
+    file.thumb720 ||
+    file.thumb480 ||
+    file.thumb360 ||
+    file.urlPrivateDownload ||
+    file.urlPrivate;
+
+  const fileFetchUrl = file.urlPrivateDownload || file.urlPrivate || imageFetchUrl;
+  const Icon = isImage ? Image : FileText;
+
+  const [imageSrc, setImageSrc] = useState<string | null>(null);
+  const [imageError, setImageError] = useState<string | null>(null);
+  const [previewDataUrl, setPreviewDataUrl] = useState<string | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    setImageSrc(null);
+    setImageError(null);
+
+    if (!isImage) return;
+    if (!imageFetchUrl) {
+      setImageError("No Slack image URL returned.");
+      return;
+    }
+
+    getSlackFileDataUrl(imageFetchUrl)
+      .then((dataUrl) => {
+        if (alive) setImageSrc(dataUrl);
+      })
+      .catch((error) => {
+        if (alive) {
+          console.error("Slack image load error:", error);
+          setImageError(String(error));
+        }
+      });
+
+    return () => {
+      alive = false;
+    };
+  }, [imageFetchUrl, isImage]);
+
+  if (isImage) {
+    return (
+      <div className="max-w-xl overflow-hidden rounded-2xl border border-white/10 bg-white/[0.04] transition-all hover:border-white/20">
+        {imageSrc ? (
+          <div className="relative group cursor-zoom-in" onClick={() => setPreviewDataUrl(imageSrc)}>
+            <img
+              src={imageSrc}
+              alt={name}
+              className="max-h-[420px] max-w-full object-contain block"
+              loading="lazy"
+            />
+            <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+              <div className="bg-gray-900/80 backdrop-blur-md rounded-xl p-2 border border-white/10">
+                <ExternalLink className="w-5 h-5 text-white" />
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="flex h-44 w-72 flex-col items-center justify-center gap-3 bg-white/[0.03] p-4 text-center text-gray-500">
+            {imageError ? <Image className="h-8 w-8 opacity-40 text-red-400" /> : <Loader2 className="h-6 w-6 animate-spin text-blue-400" />}
+            {imageError && (
+              <p className="max-w-64 text-[10px] font-black uppercase tracking-widest text-red-300/60 leading-tight break-words">
+                {imageError.includes("401") || imageError.includes("403") || imageError.includes("missing_scope")
+                  ? "Authentication Required for Asset"
+                  : `Packet Transfer Failed: ${imageError}`}
+              </p>
+            )}
+          </div>
+        )}
+        <div className="flex w-full items-center gap-2 border-t border-white/10 px-3 py-2 text-left text-[11px] font-black uppercase tracking-widest text-gray-400">
+          <Image className="h-3.5 w-3.5 flex-shrink-0 text-blue-400" />
+          <span className="min-w-0 flex-1 truncate">{name}</span>
+        </div>
+        {previewDataUrl && <FilePreviewModal name={name} dataUrl={previewDataUrl} onClose={() => setPreviewDataUrl(null)} />}
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <button
+        type="button"
+        className="inline-flex items-center gap-3 px-4 py-3 rounded-2xl border border-white/10 bg-white/[0.04] hover:bg-white/[0.08] hover:border-white/20 transition-all group max-w-xs shadow-lg active:scale-95"
+        disabled={!fileFetchUrl || previewLoading}
+        onClick={() => {
+          if (!fileFetchUrl) return;
+          if (isPdf) {
+            setPreviewLoading(true);
+            getSlackFileDataUrl(fileFetchUrl)
+              .then((dataUrl) => setPreviewDataUrl(dataUrl))
+              .finally(() => setPreviewLoading(false));
+          } else {
+             // For other files, opening in browser is safer than iframe data URLs
+             if (file.permalink) openExternalUrl(file.permalink);
+             else if (fileFetchUrl) openExternalUrl(fileFetchUrl);
+          }
+        }}
+      >
+        {previewLoading ? (
+          <Loader2 className="w-4 h-4 animate-spin text-blue-400 flex-shrink-0" />
+        ) : (
+          <Icon className="w-4 h-4 text-blue-400 flex-shrink-0 group-hover:scale-110 transition-transform" />
+        )}
+        <div className="flex flex-col items-start min-w-0">
+          <span className="text-[12px] font-bold text-gray-100 truncate w-full">{name}</span>
+          <span className="text-[9px] font-black uppercase tracking-widest text-gray-500">
+            {isPdf ? "Preview PDF" : "Open in Slack"}
+          </span>
+        </div>
+      </button>
+      {previewDataUrl && <FilePreviewModal name={name} dataUrl={previewDataUrl} onClose={() => setPreviewDataUrl(null)} />}
+    </>
+  );
+}
+
+function FilePreviewModal({ name, dataUrl, onClose }: { name: string; dataUrl: string; onClose: () => void }) {
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/90 backdrop-blur-sm p-8" onClick={onClose}>
+      <div
+        className="flex h-full max-h-[90%] w-full max-w-6xl flex-col overflow-hidden rounded-[32px] border border-white/10 bg-gray-900 shadow-[0_0_50px_rgba(0,0,0,0.5)]"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between border-b border-white/5 px-8 py-5">
+          <div className="flex items-center gap-3">
+             <div className="w-8 h-8 rounded-xl bg-gray-800 border border-white/10 flex items-center justify-center">
+                <FileText className="w-4 h-4 text-blue-400" />
+             </div>
+             <span className="truncate text-[13px] font-black text-white uppercase tracking-widest">{name}</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+                type="button"
+                onClick={() => {
+                  const link = document.createElement("a");
+                  link.href = dataUrl;
+                  link.download = name;
+                  link.click();
+                }}
+                className="flex items-center gap-2 rounded-xl bg-white/5 px-4 py-2 text-[10px] font-black uppercase tracking-widest text-gray-300 hover:bg-white/10 hover:text-white transition-all"
+              >
+                <Download className="w-3.5 h-3.5" />
+                Download
+              </button>
+              <button
+                type="button"
+                onClick={onClose}
+                className="flex items-center gap-2 rounded-xl bg-blue-600 px-5 py-2 text-[10px] font-black uppercase tracking-widest text-white hover:bg-blue-500 shadow-lg shadow-blue-500/20 transition-all"
+              >
+                Close
+              </button>
+          </div>
+        </div>
+        <div className="flex-1 bg-white relative">
+          <iframe
+            src={dataUrl}
+            title={name}
+            className="h-full w-full border-0 block"
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function MessageBubble({
+  msg,
+  username,
+  resolveUser,
+}: {
+  msg: SlackMessage;
+  username: string;
+  resolveUser: (id: string) => string;
+}) {
   const displayName = username || msg.username || msg.user || "Unknown";
   const text = msg.text ?? "";
 
   return (
-    <div className="flex items-start gap-4 px-6 py-4 hover:bg-white/[0.03] transition-colors group">
+    <div className="flex items-start gap-4 px-6 py-4 hover:bg-white/[0.02] transition-colors group">
       <div
-        className="w-10 h-10 rounded-xl flex-shrink-0 flex items-center justify-center text-white text-[11px] font-black shadow-md"
+        className="w-10 h-10 rounded-xl flex-shrink-0 flex items-center justify-center text-white text-[11px] font-black shadow-lg ring-1 ring-white/5"
         style={{ background: avatarColor(displayName) }}
       >
         {getInitials(displayName)}
@@ -221,29 +462,27 @@ function MessageBubble({ msg, username }: { msg: SlackMessage; username: string 
       <div className="flex-1 min-w-0">
         <div className="flex items-baseline gap-2.5 mb-1.5">
           <span className="text-[13px] font-black text-white tracking-tight">{displayName}</span>
-          <span className="text-[11px] font-semibold text-gray-400">{formatTs(msg.ts)}</span>
+          <span className="text-[10px] font-black uppercase tracking-widest text-gray-500">{formatTs(msg.ts)}</span>
         </div>
         {text && (
-          <p className="text-[14px] text-gray-100 leading-relaxed whitespace-pre-wrap break-words font-normal">{renderMessageText(text)}</p>
+          <SlackMessageText text={text} resolveUser={resolveUser} />
         )}
-        {/* File attachments */}
         {msg.files && msg.files.length > 0 && (
-          <div className="flex flex-wrap gap-2 mt-2">
+          <div className="flex flex-wrap gap-3 mt-3">
             {msg.files.map((f) => (
               <FileAttachment key={f.id} file={f} />
             ))}
           </div>
         )}
-        {/* Reactions */}
         {msg.reactions && msg.reactions.length > 0 && (
-          <div className="flex flex-wrap gap-1.5 mt-2.5">
+          <div className="flex flex-wrap gap-1.5 mt-3">
             {msg.reactions.map((r) => (
               <span
                 key={r.name}
-                className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-white/[0.06] border border-white/10 rounded-full text-[12px] font-semibold text-gray-200 hover:bg-white/[0.1] hover:border-white/20 transition-all cursor-default select-none"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-gray-900 border border-white/5 rounded-full text-[12px] font-semibold text-gray-300 hover:border-white/20 transition-all cursor-default select-none shadow-sm"
               >
-                <span>{resolveEmoji(r.name)}</span>
-                <span className="text-gray-400 text-[11px]">{r.count}</span>
+                <span className="text-sm">{resolveEmoji(r.name)}</span>
+                <span className="text-gray-500 text-[10px] font-black">{r.count}</span>
               </span>
             ))}
           </div>
@@ -262,7 +501,6 @@ export default function SlackView() {
   const [messageInput, setMessageInput] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  // Check for token
   const { data: tokenInfo, isLoading: tokenLoading, refetch: refetchToken } = useQuery<SlackTokenInfo | null>({
     queryKey: ["slack-token"],
     queryFn: slackGetToken,
@@ -272,7 +510,6 @@ export default function SlackView() {
 
   const isConnected = !!tokenInfo;
 
-  // Fetch channels (needed to resolve active channel metadata)
   const { data: channelData } = useQuery({
     queryKey: ["slack-channels"],
     queryFn: () => listSlackChannels(),
@@ -282,7 +519,6 @@ export default function SlackView() {
 
   const channels = channelData?.channels ?? [];
 
-  // Fetch message history for active channel
   const { data: historyData, isLoading: historyLoading } = useQuery({
     queryKey: ["slack-history", slackChannelId],
     queryFn: () => getSlackHistory(slackChannelId!, undefined, undefined),
@@ -292,11 +528,14 @@ export default function SlackView() {
 
   const messages = (historyData?.messages ?? []).slice().reverse();
 
-  // Resolve user IDs → display names
-  const messageUserIds = [...new Set(messages.map((m) => m.user).filter(Boolean) as string[])];
+  const messageUserIds = [
+    ...new Set([
+      ...(messages.map((m) => m.user).filter(Boolean) as string[]),
+      ...messages.flatMap((m) => extractMentionUserIds(m.text)),
+    ]),
+  ];
   const resolveUser = useSlackUsers(messageUserIds, isConnected);
 
-  // Update Gemini context when messages change
   useEffect(() => {
     if (slackChannelId && messages.length > 0) {
       const last20 = messages.slice(-20);
@@ -309,7 +548,6 @@ export default function SlackView() {
     return () => clearGeminiContext();
   }, [slackChannelId, messages]);
 
-  // Poll for new messages every 10 seconds
   useEffect(() => {
     if (!isConnected || !slackChannelId) return;
     const interval = setInterval(() => {
@@ -318,12 +556,10 @@ export default function SlackView() {
     return () => clearInterval(interval);
   }, [isConnected, slackChannelId, queryClient]);
 
-  // Auto-scroll to bottom
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages.length]);
 
-  // Send message mutation
   const sendMutation = useMutation({
     mutationFn: ({ channelId, text }: { channelId: string; text: string }) =>
       sendSlackMessage(channelId, text),
@@ -352,7 +588,7 @@ export default function SlackView() {
 
   if (tokenLoading) {
     return (
-      <div className="flex h-full items-center justify-center" style={{ background: "var(--c-bg)" }}>
+      <div className="flex h-full items-center justify-center bg-gray-950">
         <Loader2 className="w-6 h-6 animate-spin text-blue-400" />
       </div>
     );
@@ -360,54 +596,59 @@ export default function SlackView() {
 
   if (!isConnected) {
     return (
-      <div className="flex h-full items-center justify-center" style={{ background: "var(--c-bg)" }}>
+      <div className="flex h-full items-center justify-center bg-gray-950">
         <ConnectSlack onConnected={() => void refetchToken()} />
       </div>
     );
   }
 
   return (
-    <div className="flex flex-col h-full overflow-hidden" style={{ background: "var(--c-surface)" }}>
+    <div className="flex flex-col h-full overflow-hidden bg-gray-950">
       {!slackChannelId ? (
-        <div className="flex-1 flex flex-col items-center justify-center opacity-10 grayscale">
+        <div className="flex-1 flex flex-col items-center justify-center opacity-10 grayscale bg-gray-950">
           <MessageCircle className="w-24 h-24 mb-8 text-blue-400" />
           <p className="text-xl font-black text-white uppercase tracking-[0.5em]">Select a Channel</p>
         </div>
       ) : (
         <>
           {/* Channel header */}
-          <div className="px-8 py-5 border-b border-white/5 flex items-center gap-4 flex-shrink-0">
-            <div className="w-10 h-10 rounded-2xl bg-gray-900 flex items-center justify-center shadow-[0_0_15px_rgba(255,255,255,0.05)] border border-white/5">
+          <div className="px-8 py-6 border-b border-white/5 flex items-center gap-5 flex-shrink-0 bg-gray-950/50 backdrop-blur-md">
+            <div className="w-12 h-12 rounded-2xl bg-gray-900 flex items-center justify-center shadow-2xl border border-white/5 ring-1 ring-white/5">
               {activeChannel?.isIm ? (
-                <User className="w-5 h-5 text-blue-400" />
+                <User className="w-6 h-6 text-blue-400" />
               ) : activeChannel?.isPrivate ? (
-                <Lock className="w-5 h-5 text-blue-400" />
+                <Lock className="w-6 h-6 text-blue-400" />
               ) : (
-                <Hash className="w-5 h-5 text-blue-400" />
+                <Hash className="w-6 h-6 text-blue-400" />
               )}
             </div>
-            <div>
-              <h2 className="text-[13px] font-black text-white uppercase tracking-tight">
+            <div className="min-w-0">
+              <h2 className="text-[15px] font-black text-white uppercase tracking-tight truncate mb-1">
                 {activeChannel?.name ?? slackChannelId}
               </h2>
-              {activeChannel?.topic?.value && (
-                <p className="text-[10px] text-gray-500 font-bold truncate max-w-lg">
+              {activeChannel?.topic?.value ? (
+                <p className="text-[10px] text-gray-500 font-bold truncate max-w-2xl uppercase tracking-widest">
                   {activeChannel.topic.value}
                 </p>
+              ) : (
+                <div className="flex items-center gap-2">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]" />
+                    <p className="text-[9px] text-gray-500 font-black uppercase tracking-widest">Encrypted Stream Active</p>
+                </div>
               )}
             </div>
           </div>
 
           {/* Messages */}
-          <div className="flex-1 overflow-y-auto custom-scrollbar py-2">
+          <div className="flex-1 overflow-y-auto custom-scrollbar py-6">
             {historyLoading ? (
               <div className="flex justify-center py-12">
-                <Loader2 className="w-5 h-5 animate-spin text-blue-400" />
+                <Loader2 className="w-6 h-6 animate-spin text-blue-400" />
               </div>
             ) : messages.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-24 opacity-20">
-                <Sparkles className="w-12 h-12 text-blue-400 mb-4" />
-                <p className="text-[10px] font-black text-white uppercase tracking-widest">No messages yet</p>
+              <div className="flex flex-col items-center justify-center py-32 opacity-20">
+                <Sparkles className="w-16 h-16 text-blue-400 mb-6 animate-pulse" />
+                <p className="text-[11px] font-black text-white uppercase tracking-[0.3em]">Neural Link Established. Awaiting Input.</p>
               </div>
             ) : (
               <>
@@ -416,6 +657,7 @@ export default function SlackView() {
                     key={msg.ts}
                     msg={msg}
                     username={msg.user ? resolveUser(msg.user) : (msg.username ?? "Unknown")}
+                    resolveUser={resolveUser}
                   />
                 ))}
                 <div ref={messagesEndRef} />
@@ -424,12 +666,12 @@ export default function SlackView() {
           </div>
 
           {/* Message input */}
-          <div className="border-t border-white/5 p-4 flex-shrink-0 bg-transparent">
-            <div className="flex gap-2 bg-gray-900 p-1.5 rounded-2xl border border-white/10 shadow-2xl focus-within:ring-4 focus-within:ring-blue-500/5 transition-all">
+          <div className="border-t border-white/5 p-6 flex-shrink-0 bg-transparent">
+            <div className="flex gap-3 bg-gray-900 p-2 rounded-[24px] border border-white/10 shadow-2xl focus-within:ring-4 focus-within:ring-blue-500/5 transition-all ring-1 ring-white/5">
               <textarea
                 rows={1}
-                placeholder="Message channel... (Cmd+Enter to send)"
-                className="flex-1 resize-none text-sm px-3 py-2 outline-none text-white bg-transparent placeholder:text-gray-500 placeholder:font-medium min-h-[36px] max-h-32 custom-scrollbar"
+                placeholder="Initialize communication... (Cmd+Enter)"
+                className="flex-1 resize-none text-[14px] px-4 py-3 outline-none text-white bg-transparent placeholder:text-gray-600 placeholder:font-black placeholder:uppercase placeholder:tracking-widest min-h-[48px] max-h-48 custom-scrollbar"
                 value={messageInput}
                 onChange={(e) => setMessageInput(e.target.value)}
                 onKeyDown={handleKeyDown}
@@ -437,12 +679,12 @@ export default function SlackView() {
               <button
                 onClick={handleSend}
                 disabled={!messageInput.trim() || sendMutation.isPending}
-                className="p-3 bg-blue-600 text-white rounded-xl shadow-lg shadow-blue-500/20 disabled:opacity-50 transition-all active:scale-95 self-end"
+                className="w-12 h-12 flex items-center justify-center bg-blue-600 text-white rounded-2xl shadow-xl shadow-blue-500/20 disabled:opacity-50 transition-all active:scale-95 self-end group"
               >
                 {sendMutation.isPending ? (
-                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <Loader2 className="w-5 h-5 animate-spin" />
                 ) : (
-                  <Send className="w-4 h-4" />
+                  <Send className="w-5 h-5 group-hover:scale-110 transition-transform" />
                 )}
               </button>
             </div>

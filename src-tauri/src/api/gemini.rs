@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use serde::{Deserialize, Serialize};
 
 use crate::api::client::ApiClient;
@@ -92,7 +94,11 @@ pub fn normalize_model_name(model: &str) -> String {
 }
 
 pub fn generate_content_url(model: &str) -> String {
-    format!("{}/{}:generateContent", GEMINI_API_ROOT, normalize_model_name(model))
+    format!(
+        "{}/{}:generateContent",
+        GEMINI_API_ROOT,
+        normalize_model_name(model)
+    )
 }
 
 fn model_supports_generate_content(model: &GeminiModel) -> bool {
@@ -131,9 +137,7 @@ pub async fn list_models(client: &ApiClient) -> Result<Vec<GeminiModel>, AppErro
     models.sort_by(|a, b| {
         let a_flash = a.name.contains("flash");
         let b_flash = b.name.contains("flash");
-        b_flash
-            .cmp(&a_flash)
-            .then_with(|| b.name.cmp(&a.name))
+        b_flash.cmp(&a_flash).then_with(|| b.name.cmp(&a.name))
     });
 
     Ok(models)
@@ -239,18 +243,6 @@ pub struct FunctionDeclaration {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Tool {
     pub function_declarations: Vec<FunctionDeclaration>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FunctionCall {
-    pub name: String,
-    pub args: serde_json::Value,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FunctionResponse {
-    pub name: String,
-    pub response: serde_json::Value,
 }
 
 // ---------------------------------------------------------------------------
@@ -371,10 +363,12 @@ pub async fn generate_with_tools(
         }));
     }
 
-    let system_instruction = system_prompt.map(|text| serde_json::json!({
-        "role": "system",
-        "parts": [{ "text": text }]
-    }));
+    let system_instruction = system_prompt.map(|text| {
+        serde_json::json!({
+            "role": "system",
+            "parts": [{ "text": text }]
+        })
+    });
 
     let tools = vec![serde_json::json!({
         "function_declarations": drive_tool_declarations().function_declarations.iter().map(|fd| {

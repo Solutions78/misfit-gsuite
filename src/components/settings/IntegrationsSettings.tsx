@@ -22,9 +22,16 @@ import {
   listSharedDrives,
   listSpaces,
   setFirefliesApiKey,
+  setKgTier,
   startOAuthFlow,
 } from "@/lib/tauri";
-import { getSelectedGeminiModel, setSelectedGeminiModel } from "@/lib/appSettings";
+import {
+  getGeminiTier,
+  getSelectedGeminiModel,
+  setGeminiTier,
+  setSelectedGeminiModel,
+} from "@/lib/appSettings";
+import type { GeminiTier } from "@/lib/appSettings";
 import type { GeminiModel } from "@/types";
 
 interface Props {
@@ -216,6 +223,7 @@ export default function IntegrationsSettings({ open, onClose }: Props) {
   const queryClient = useQueryClient();
   const [apiKey, setApiKey] = useState("");
   const [selectedModel, setSelectedModel] = useState<string>("");
+  const [selectedTier, setSelectedTier] = useState<GeminiTier>("ultra");
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -235,6 +243,7 @@ export default function IntegrationsSettings({ open, onClose }: Props) {
   useEffect(() => {
     if (!open) return;
     setSelectedModel(getSelectedGeminiModel() || "");
+    setSelectedTier(getGeminiTier());
     setMessage(null);
     setError(null);
   }, [open]);
@@ -287,6 +296,19 @@ export default function IntegrationsSettings({ open, onClose }: Props) {
     setSelectedModel(model);
     setSelectedGeminiModel(model);
     setMessage(`Gemini model set to ${model.replace(/^models\//, "")}.`);
+    setError(null);
+  };
+
+  const handleTierChange = (tier: GeminiTier) => {
+    setSelectedTier(tier);
+    setGeminiTier(tier);
+    void setKgTier(tier).catch((e) => console.error("set_kg_tier failed:", e));
+    const labels: Record<GeminiTier, string> = {
+      free: "Free (~15 RPM)",
+      pro: "Pro (~60 RPM)",
+      ultra: "Ultra (~250 RPM)",
+    };
+    setMessage(`Enrichment tier set to ${labels[tier]}.`);
     setError(null);
   };
 
@@ -402,6 +424,43 @@ export default function IntegrationsSettings({ open, onClose }: Props) {
                 Could not load Gemini models: {String(geminiModels.error)}
               </p>
             )}
+
+            {/* Enrichment Tier */}
+            <div className="mt-5">
+              <label className="block text-[10px] font-black uppercase tracking-widest mb-2" style={{ color: "var(--mm-text-muted)" }}>
+                Knowledge Graph Enrichment Tier
+              </label>
+              <p className="text-[11px] font-medium mb-3" style={{ color: "var(--mm-text-muted)" }}>
+                Controls how fast the KG enricher calls Gemini. Match this to your API quota.
+              </p>
+              <div className="grid grid-cols-3 gap-2">
+                {(
+                  [
+                    { tier: "free" as GeminiTier, label: "FREE", rpm: "~15 RPM", time: "~74 hrs for 66k files" },
+                    { tier: "pro" as GeminiTier, label: "PRO", rpm: "~60 RPM", time: "~18 hrs for 66k files" },
+                    { tier: "ultra" as GeminiTier, label: "ULTRA", rpm: "~250 RPM", time: "~4.4 hrs for 66k files" },
+                  ] as const
+                ).map(({ tier, label, rpm, time }) => {
+                  const active = selectedTier === tier;
+                  return (
+                    <button
+                      key={tier}
+                      onClick={() => handleTierChange(tier)}
+                      className={[
+                        "flex flex-col items-center gap-1 px-3 py-3 rounded-2xl border text-center transition-all",
+                        active
+                          ? "bg-gray-900 border-white/5 shadow-[0_0_20px_rgba(255,255,255,0.12)]"
+                          : "bg-transparent border-white/5 opacity-60 hover:opacity-80",
+                      ].join(" ")}
+                    >
+                      <span className="text-[11px] font-black uppercase tracking-widest text-white">{label}</span>
+                      <span className="text-[10px] font-bold text-blue-400">{rpm}</span>
+                      <span className="text-[9px] font-medium text-gray-500">{time}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
           </section>
 
           {(message || error) && (

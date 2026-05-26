@@ -5,9 +5,10 @@ mod commands;
 mod db;
 mod error;
 mod kg;
+mod logging;
 
 use rusqlite::Connection;
-use tauri::{Emitter, Manager};
+use tauri::Manager;
 use tokio::sync::{Mutex, RwLock};
 
 use crate::api::client::ApiClient;
@@ -15,8 +16,8 @@ use crate::api::client::ApiClient;
 pub struct AppState {
     pub api: RwLock<ApiClient>,
     pub db: Mutex<Connection>,
-    pub client_id: String,
-    pub client_secret: String,
+    pub client_id: Mutex<String>,
+    pub client_secret: Mutex<String>,
     pub proxy_base: String,
     pub proxy_app_token: String,
     pub sync_lock: Mutex<()>,
@@ -28,25 +29,39 @@ unsafe impl Sync for AppState {}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // In dev, load .env from the working directory so `npm run tauri dev` works
-    // without setting env vars in the shell. In release builds the values are
-    // baked in at compile time via env!() below and dotenv() is a no-op.
-    dotenvy::dotenv().ok();
+    let log_path = crate::logging::init();
+    crate::logging::info(
+        "app",
+        format!(
+            "starting Misfit GSuite version={} log_path={}",
+            env!("CARGO_PKG_VERSION"),
+            log_path.display()
+        ),
+    );
 
-    // Credentials are baked into the binary at compile time from the build
-    // environment. The env!() macro fails the build (not the runtime) if the
-    // variable is unset, giving a clear error at `npm run tauri build`.
-    // In dev, dotenvy above loads .env first so std::env::var() is used as
-    // the runtime source; env!() provides the compile-time fallback for release.
-    let client_id =
-        std::env::var("GOOGLE_CLIENT_ID").unwrap_or_else(|_| env!("GOOGLE_CLIENT_ID").to_string());
-    let client_secret = std::env::var("GOOGLE_CLIENT_SECRET")
-        .unwrap_or_else(|_| env!("GOOGLE_CLIENT_SECRET").to_string());
-
-    let proxy_base = std::env::var("PROXY_BASE_URL")
-        .unwrap_or_else(|_| option_env!("PROXY_BASE_URL").unwrap_or("").to_string());
-    let proxy_app_token = std::env::var("PROXY_APP_TOKEN")
-        .unwrap_or_else(|_| option_env!("PROXY_APP_TOKEN").unwrap_or("").to_string());
+    // Do not read the macOS Keychain before the Tauri event loop exists.
+    // Security.framework can block waiting for user approval/Touch ID, and doing
+    // that here freezes app launch before the UI can show an auth prompt.
+    //
+    // In production these start empty and `has_app_credentials` loads the
+    // Keychain values on a blocking worker once the frontend is running. In dev,
+    // build.rs can still inject .env values for a no-setup workflow.
+    let client_id = option_env!("GOOGLE_CLIENT_ID").unwrap_or("").to_string();
+    let client_secret = option_env!("GOOGLE_CLIENT_SECRET")
+        .unwrap_or("")
+        .to_string();
+    let proxy_base = option_env!("PROXY_BASE_URL").unwrap_or("").to_string();
+    let proxy_app_token = option_env!("PROXY_APP_TOKEN").unwrap_or("").to_string();
+    crate::logging::info(
+        "app",
+        format!(
+            "initial credential state client_id_present={} client_secret_present={} proxy_present={} proxy_token_present={}",
+            !client_id.is_empty(),
+            !client_secret.is_empty(),
+            !proxy_base.is_empty(),
+            !proxy_app_token.is_empty()
+        ),
+    );
 
     let db_path = dirs_next::data_local_dir()
         .unwrap_or_else(|| std::path::PathBuf::from("."))
@@ -57,6 +72,10 @@ pub fn run() {
 
     let conn = Connection::open(&db_path).expect("Failed to open SQLite database");
     db::initialize(&conn).expect("Failed to initialize database schema");
+    crate::logging::info(
+        "app",
+        format!("database initialized path={}", db_path.display()),
+    );
 
     let api_client = ApiClient::new(client_id.clone(), client_secret.clone());
 
@@ -70,14 +89,15 @@ pub fn run() {
         .manage(AppState {
             api: RwLock::new(api_client),
             db: Mutex::new(conn),
-            client_id: client_id.clone(),
-            client_secret: client_secret.clone(),
+            client_id: Mutex::new(client_id.clone()),
+            client_secret: Mutex::new(client_secret.clone()),
             proxy_base,
             proxy_app_token,
             sync_lock: Mutex::new(()),
         })
         .setup(|app| {
             let handle = app.handle().clone();
+            crate::logging::info("app.setup", "tauri setup entered");
 
             // Give ApiClient a reference to the AppHandle so it can emit
             // auth::token_revoked when a refresh token is rejected (400).
@@ -87,55 +107,57 @@ pub fn run() {
                     state.api.write().await.set_app_handle(handle.clone());
                 });
             }
+            crate::logging::info("app.setup", "api app_handle installed");
 
-            // Restore tokens for previously logged-in accounts from keychain,
-            // then start background periodic sync.
+            // Do not touch the Keychain during setup. The frontend triggers
+            // has_app_credentials() and get_current_account() after the window
+            // is visible, which gives macOS somewhere to display Keychain /
+            // Touch ID approval prompts. Doing it here caused invisible
+            // Security.framework waits and made login look frozen.
             tauri::async_runtime::spawn(async move {
-                let state = handle.state::<AppState>();
-                let emails = {
-                    let db_guard = state.db.lock().await;
-                    crate::db::queries::list_accounts(&db_guard)
-                        .unwrap_or_default()
-                        .into_iter()
-                        .map(|(email, _, _)| email)
-                        .collect::<Vec<_>>()
-                };
+                crate::logging::info(
+                    "auth.restore",
+                    "startup Keychain restore deferred to frontend get_current_account",
+                );
 
-                let mut restored_emails = Vec::new();
-                let mut stale_emails = Vec::new();
+                // ── Knowledge Graph Startup Manager ─────────────────────────
+                let kg_handle = handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    let state = kg_handle.state::<AppState>();
 
-                for email in &emails {
-                    match crate::auth::keychain::load_token(email) {
-                        Ok(Some(token)) if token.has_required_scopes() => {
-                            let api = state.api.read().await;
-                            api.oauth_state.write().await.add_or_update(token);
-                            restored_emails.push(email.clone());
-                        }
-                        Ok(Some(_)) | Ok(None) => {
-                            // Stored account is no longer usable (usually missing newly added
-                            // OAuth scopes). Clear it so the frontend shows the login screen
-                            // instead of waiting forever on a token that cannot be restored.
-                            let _ = crate::auth::keychain::delete_token(email);
-                            stale_emails.push(email.clone());
-                        }
-                        Err(err) => {
-                            eprintln!("Failed to restore token for {}: {}", email, err);
-                            let _ = handle.emit("auth::restore_failed", email);
+                    // Small delay to let initial sync stabilize
+                    tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+
+                    let conn = state.db.lock().await;
+                    if let Ok(crawl_state) = crate::db::kg_queries::get_crawl_state(&conn) {
+                        if crawl_state.crawl_status == "running" {
+                            crate::logging::info("kg", "detected interrupted crawl; resuming");
+                            let api_guard = state.api.read().await;
+                            let _ = crate::kg::crawler::run_full_crawl(
+                                &api_guard, &state.db, &kg_handle,
+                            )
+                            .await;
                         }
                     }
-                }
 
-                if !stale_emails.is_empty() {
-                    let db_guard = state.db.lock().await;
-                    for email in &stale_emails {
-                        let _ = crate::db::queries::delete_account(&db_guard, email);
-                        let _ = handle.emit("auth::signed_out", email);
+                    // Always trigger enrichment batch check on startup
+                    let pending =
+                        crate::db::kg_queries::get_pending_enrichment_count(&conn).unwrap_or(0);
+                    if pending > 0 {
+                        crate::logging::info(
+                            "kg",
+                            format!(
+                                "found pending enrichment files count={}; starting batch",
+                                pending
+                            ),
+                        );
+                        let api_guard = state.api.read().await;
+                        let _ = crate::kg::enricher::run_enrichment_batch(
+                            &api_guard, &state.db, &kg_handle,
+                        )
+                        .await;
                     }
-                }
-
-                if let Some(email) = restored_emails.first() {
-                    let _ = handle.emit("auth::restored", email);
-                }
+                });
 
                 // Periodic sync: every 30 seconds, call sync_inbox via the state handle
                 let sync_handle = handle.clone();
@@ -170,14 +192,12 @@ pub fn run() {
                         )
                         .await
                         {
-                            eprintln!("Background sync error: {}", e);
+                            crate::logging::error(
+                                "background.sync",
+                                format!("background sync error={e}"),
+                            );
                         }
                     }
-                });
-
-                let kg_handle = handle.clone();
-                tauri::async_runtime::spawn(async move {
-                    background::scheduler::start_kg_nightly_scheduler(kg_handle).await;
                 });
             });
 
@@ -241,35 +261,25 @@ pub fn run() {
             commands::chat_commands::search_chat_contacts,
             commands::chat_commands::delete_chat_space,
             // Gemini
-            commands::gemini_commands::list_gemini_models,
             commands::gemini_commands::gemini_chat,
             commands::gemini_commands::generate_email_reply,
             commands::gemini_commands::organize_inbox,
             commands::gemini_commands::generate_daily_report,
-            commands::gemini_drive_commands::gemini_drive_chat,
-            // Slack
-            commands::slack_commands::start_slack_oauth_flow,
-            commands::slack_commands::slack_exchange_code,
-            commands::slack_commands::slack_get_token,
-            commands::slack_commands::slack_disconnect,
-            commands::slack_commands::list_slack_channels,
-            commands::slack_commands::get_slack_history,
-            commands::slack_commands::get_slack_user,
-            commands::slack_commands::get_slack_file_data_url,
-            commands::slack_commands::send_slack_message,
-            // Fireflies
-            commands::fireflies_commands::list_fireflies_meetings,
-            commands::fireflies_commands::get_fireflies_meeting,
-            commands::fireflies_commands::list_fireflies_channels,
-            commands::fireflies_commands::move_fireflies_meetings,
-            commands::fireflies_commands::get_fireflies_api_key_status,
-            commands::fireflies_commands::set_fireflies_api_key,
-            commands::fireflies_commands::delete_fireflies_api_key,
+            // Setup
+            commands::setup_commands::save_app_credentials,
+            commands::setup_commands::has_app_credentials,
+            // Logs
+            commands::log_commands::get_log_file_path,
+            commands::log_commands::read_recent_logs,
+            commands::log_commands::clear_logs,
+            commands::log_commands::write_frontend_log,
             // Knowledge Graph
             commands::kg_commands::start_kg_crawl,
             commands::kg_commands::get_kg_status,
             commands::kg_commands::get_kg_graph,
             commands::kg_commands::get_kg_node,
+            commands::kg_commands::set_kg_tier,
+            commands::kg_commands::get_kg_tier,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

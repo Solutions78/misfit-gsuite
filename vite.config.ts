@@ -14,6 +14,12 @@ export default defineConfig(async () => ({
       "@": path.resolve(__dirname, "./src"),
     },
   },
+  build: {
+    // Route-level dynamic imports keep startup light. The 3D knowledge graph is
+    // intentionally isolated because Three.js/react-force-graph is a large
+    // optional feature chunk that only loads when the Knowledge view opens.
+    chunkSizeWarningLimit: 1500,
+  },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //

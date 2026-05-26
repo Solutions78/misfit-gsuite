@@ -6,7 +6,12 @@ use crate::db::queries;
 use crate::AppState;
 
 fn validate_drive_id(id: &str) -> Result<(), String> {
-    if id.is_empty() || id.len() > 256 || !id.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_') {
+    if id.is_empty()
+        || id.len() > 256
+        || !id
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+    {
         return Err(format!("Invalid Drive ID: '{}'", id));
     }
     Ok(())

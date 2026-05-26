@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import { useDocStore } from "@/store/docStore";
 import { geminiChatWithSearch } from "@/lib/tauri";
+import { getSelectedGeminiModel } from "@/lib/appSettings";
 import type { GeminiMessage } from "@/types";
 import { Globe, Send, Sparkles } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -45,7 +46,7 @@ export default function GeminiDocsPanel(): React.JSX.Element {
     setTimeout(scrollToBottom, 50);
 
     try {
-      const reply = await geminiChatWithSearch(next, context, webSearch);
+      const reply = await geminiChatWithSearch(next, context, webSearch, getSelectedGeminiModel());
       const modelMsg: GeminiMessage = { role: "model", text: reply ?? "" };
       setMessages((prev) => [...prev, modelMsg]);
       setTimeout(scrollToBottom, 50);

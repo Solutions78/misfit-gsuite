@@ -6,6 +6,30 @@ import type { SlackUser } from "@/types";
 // Shared module-level cache — survives component unmounts, dedups across Sidebar + SlackView
 export const slackUserCache: Map<string, SlackUser> = new Map();
 
+function clean(value?: string | null): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed || undefined;
+}
+
+export function getSlackDisplayName(user: SlackUser | undefined, fallbackId: string): string {
+  if (!user) return fallbackId;
+
+  return (
+    clean(user.profile?.displayName) ||
+    clean(user.profile?.displayNameNormalized) ||
+    clean(user.profile?.display_name) ||
+    clean(user.profile?.display_name_normalized) ||
+    clean(user.realName) ||
+    clean(user.profile?.realName) ||
+    clean(user.profile?.realNameNormalized) ||
+    clean(user.real_name) ||
+    clean(user.profile?.real_name) ||
+    clean(user.profile?.real_name_normalized) ||
+    clean(user.name) ||
+    fallbackId
+  );
+}
+
 export function useSlackUsers(userIds: string[], enabled: boolean) {
   const queryClient = useQueryClient();
   const [, forceUpdate] = useState(0);
@@ -20,7 +44,7 @@ export function useSlackUsers(userIds: string[], enabled: boolean) {
       missing.map((id) =>
         queryClient
           .fetchQuery({
-            queryKey: ["slack-user", id],
+            queryKey: ["slack-user", id, "display-name-v2"],
             queryFn: () => getSlackUser(id),
             staleTime: 300_000,
           })
@@ -37,7 +61,6 @@ export function useSlackUsers(userIds: string[], enabled: boolean) {
 
   return (id: string): string => {
     const u = slackUserCache.get(id);
-    if (!u) return id;
-    return u.profile?.display_name || u.real_name || u.name || id;
+    return getSlackDisplayName(u, id);
   };
 }

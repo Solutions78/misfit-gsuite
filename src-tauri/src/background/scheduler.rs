@@ -23,8 +23,8 @@ pub async fn start_token_refresh_scheduler(state: Arc<AppState>, app: AppHandle)
                 match crate::auth::oauth::refresh_token(
                     &api.http,
                     &token.refresh_token,
-                    &state.client_id,
-                    &state.client_secret,
+                    &state.client_id.lock().await,
+                    &state.client_secret.lock().await,
                 )
                 .await
                 {
@@ -61,6 +61,7 @@ pub async fn start_token_refresh_scheduler(state: Arc<AppState>, app: AppHandle)
     }
 }
 
+#[allow(dead_code)]
 pub async fn start_kg_nightly_scheduler(app: tauri::AppHandle) {
     let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(60 * 60 * 24));
     interval.tick().await; // skip first tick — don't run delta sync on app startup

@@ -96,7 +96,15 @@ impl ApiClient {
 
         let resp = match result {
             Ok(r) => r,
-            Err(AppError::Http(ref e)) if matches!(e.status().map(|s| s.as_u16()), Some(400) | Some(401)) => {
+            Err(AppError::Http(ref e))
+                if matches!(e.status().map(|s| s.as_u16()), Some(400) | Some(401)) =>
+            {
+                self.handle_revoked_token(&token.email).await;
+                return Err(AppError::NotAuthenticated);
+            }
+            Err(AppError::Api {
+                status: 400 | 401, ..
+            }) => {
                 self.handle_revoked_token(&token.email).await;
                 return Err(AppError::NotAuthenticated);
             }

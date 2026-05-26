@@ -1,21 +1,11 @@
-import { useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { useUIStore } from "@/store/uiStore";
 import { useQueryClient } from "@tanstack/react-query";
 import TopNav from "./TopNav";
 import Sidebar from "./Sidebar";
 import RightPanel from "./RightPanel";
-import MailView from "@/components/mail/MailView";
-import CalendarView from "@/components/calendar/CalendarView";
-import DriveView from "@/components/drive/DriveView";
-import DocsView from "@/components/drive/DocsView";
-import ConsoleView from "@/components/layout/ConsoleView";
-import SlackView from "@/components/slack/SlackView";
-import FirefliesView from "@/components/fireflies/FirefliesView";
-import KnowledgeView from "@/components/knowledge/KnowledgeView";
-import ComposeModal from "@/components/mail/ComposeModal";
 import GeminiButton from "@/components/gemini/GeminiButton";
-import GeminiDrawer from "@/components/gemini/GeminiDrawer";
 import ThemePanel from "@/components/layout/ThemePanel";
 import SessionTimer from "@/components/auth/SessionTimer";
 import { syncInbox, drainPendingOps } from "@/lib/tauri";
@@ -25,7 +15,26 @@ import {
   CUSTOM_THEME_CHANGED_EVENT,
   loadCustomTheme,
 } from "@/lib/appSettings";
-import { Sparkles } from "lucide-react";
+import { Loader2 } from "lucide-react";
+
+const MailView = lazy(() => import("@/components/mail/MailView"));
+const CalendarView = lazy(() => import("@/components/calendar/CalendarView"));
+const DriveView = lazy(() => import("@/components/drive/DriveView"));
+const DocsView = lazy(() => import("@/components/drive/DocsView"));
+const ConsoleView = lazy(() => import("@/components/layout/ConsoleView"));
+const SlackView = lazy(() => import("@/components/slack/SlackView"));
+const FirefliesView = lazy(() => import("@/components/fireflies/FirefliesView"));
+const KnowledgeView = lazy(() => import("@/components/knowledge/KnowledgeView"));
+const ComposeModal = lazy(() => import("@/components/mail/ComposeModal"));
+const GeminiDrawer = lazy(() => import("@/components/gemini/GeminiDrawer"));
+
+function ViewFallback() {
+  return (
+    <div className="h-full flex items-center justify-center" style={{ background: "var(--c-surface)", color: "var(--c-text-2)" }}>
+      <Loader2 className="w-5 h-5 animate-spin text-blue-400" />
+    </div>
+  );
+}
 
 export default function AppShell() {
   const activeView      = useUIStore((s) => s.activeView);
@@ -149,20 +158,22 @@ export default function AppShell() {
 
         {/* Panes 2 & 3: Selection & Preview */}
         <main className="flex-1 min-w-0 relative z-10 overflow-hidden" style={{ background: "var(--mm-surface)" }}>
-          {activeView === "mail" && <MailView />}
-          {activeView === "calendar" && <CalendarView />}
-          {activeView === "drive" && <DriveView />}
-          {activeView === "docs" && <DocsView />}
-          {(activeView === "sheets" || activeView === "slides") && <DriveView filterType={activeView} />}
-          {(activeView === "cloud" || activeView === "admin") && <ConsoleView type={activeView} />}
-          {activeView === "slack" && <SlackView />}
-          {activeView === "fireflies" && <FirefliesView />}
-          {activeView === "knowledge" && <KnowledgeView />}
-          {activeView === "chat-test" && (
-            <div className="h-full flex items-center justify-center text-gray-300 font-black uppercase tracking-[0.3em] italic">
-              Debug: Chat API Test
-            </div>
-          )}
+          <Suspense fallback={<ViewFallback />}>
+            {activeView === "mail" && <MailView />}
+            {activeView === "calendar" && <CalendarView />}
+            {activeView === "drive" && <DriveView />}
+            {activeView === "docs" && <DocsView />}
+            {(activeView === "sheets" || activeView === "slides") && <DriveView filterType={activeView} />}
+            {(activeView === "cloud" || activeView === "admin") && <ConsoleView type={activeView} />}
+            {activeView === "slack" && <SlackView />}
+            {activeView === "fireflies" && <FirefliesView />}
+            {activeView === "knowledge" && <KnowledgeView />}
+            {activeView === "chat-test" && (
+              <div className="h-full flex items-center justify-center text-gray-300 font-black uppercase tracking-[0.3em] italic">
+                Debug: Chat API Test
+              </div>
+            )}
+          </Suspense>
         </main>
 
         {/* Pane 4: Chat or Gemini (Right Panel) */}
@@ -174,7 +185,9 @@ export default function AppShell() {
             />
             {(isDriveView || isSlackView || isFirefliesView || isKnowledgeView) ? (
                <div className="h-full bg-gray-50 flex flex-col border-l border-white/5">
-                  <GeminiDrawer isIntegrated />
+                  <Suspense fallback={<ViewFallback />}>
+                    <GeminiDrawer isIntegrated />
+                  </Suspense>
                </div>
             ) : (
                <RightPanel />
@@ -184,9 +197,13 @@ export default function AppShell() {
       </div>
 
       {/* Global Overlays */}
-      {composeState && <ComposeModal />}
-      {(!isDriveView && !isSlackView && !isFirefliesView) && <GeminiButton />}
-      {(geminiOpen && !isDriveView && !isSlackView && !isFirefliesView) && <GeminiDrawer />}
+      <Suspense fallback={null}>
+        {composeState && <ComposeModal />}
+      </Suspense>
+      {(!isDriveView && !isSlackView && !isFirefliesView && !isKnowledgeView) && <GeminiButton />}
+      <Suspense fallback={null}>
+        {(geminiOpen && !isDriveView && !isSlackView && !isFirefliesView && !isKnowledgeView) && <GeminiDrawer />}
+      </Suspense>
       <ThemePanel />
       <SessionTimer />
     </div>

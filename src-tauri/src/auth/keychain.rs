@@ -16,6 +16,21 @@ pub fn delete_token(email: &str) -> Result<(), AppError> {
 }
 
 #[allow(dead_code)]
+pub fn store_secret(key: &str, value: &str) -> Result<(), AppError> {
+    platform::store_secret(key, value)
+}
+
+#[allow(dead_code)]
+pub fn load_secret(key: &str) -> Result<Option<String>, AppError> {
+    platform::load_secret(key)
+}
+
+#[allow(dead_code)]
+pub fn delete_secret(key: &str) -> Result<(), AppError> {
+    platform::delete_secret(key)
+}
+
+#[allow(dead_code)]
 pub fn list_account_emails() -> Vec<String> {
     // In practice, we track known accounts via the local accounts table.
     vec![]
@@ -74,7 +89,35 @@ mod platform {
 
     pub fn delete_token(email: &str) -> Result<(), AppError> {
         let key = token_key(email);
-        match delete_generic_password(SERVICE_NAME, &key) {
+        delete_secret(&key)
+    }
+
+    pub fn store_secret(key: &str, value: &str) -> Result<(), AppError> {
+        match delete_generic_password(SERVICE_NAME, key) {
+            Ok(()) => {}
+            Err(ref e) if e.code() == errSecItemNotFound => {}
+            Err(e) => return Err(AppError::Auth(format!("Keychain delete error: {}", e))),
+        }
+
+        set_generic_password(SERVICE_NAME, key, value.as_bytes())
+            .map_err(|e| AppError::Auth(format!("Keychain write error: {}", e)))?;
+        Ok(())
+    }
+
+    pub fn load_secret(key: &str) -> Result<Option<String>, AppError> {
+        match get_generic_password(SERVICE_NAME, key) {
+            Ok(bytes) => {
+                let value = String::from_utf8(bytes)
+                    .map_err(|e| AppError::Auth(format!("Keychain value was not UTF-8: {}", e)))?;
+                Ok(Some(value))
+            }
+            Err(e) if e.code() == errSecItemNotFound => Ok(None),
+            Err(e) => Err(AppError::Auth(format!("Keychain read error: {}", e))),
+        }
+    }
+
+    pub fn delete_secret(key: &str) -> Result<(), AppError> {
+        match delete_generic_password(SERVICE_NAME, key) {
             Ok(()) => Ok(()),
             Err(e) if e.code() == errSecItemNotFound => Ok(()),
             Err(e) => Err(AppError::Auth(format!("Keychain delete error: {}", e))),
@@ -116,7 +159,30 @@ mod platform {
 
     pub fn delete_token(email: &str) -> Result<(), AppError> {
         let key = token_key(email);
-        let entry = Entry::new(SERVICE_NAME, &key)
+        delete_secret(&key)
+    }
+
+    pub fn store_secret(key: &str, value: &str) -> Result<(), AppError> {
+        let entry = Entry::new(SERVICE_NAME, key)
+            .map_err(|e| AppError::Auth(format!("Keychain entry error: {}", e)))?;
+        entry
+            .set_password(value)
+            .map_err(|e| AppError::Auth(format!("Keychain write error: {}", e)))?;
+        Ok(())
+    }
+
+    pub fn load_secret(key: &str) -> Result<Option<String>, AppError> {
+        let entry = Entry::new(SERVICE_NAME, key)
+            .map_err(|e| AppError::Auth(format!("Keychain entry error: {}", e)))?;
+        match entry.get_password() {
+            Ok(value) => Ok(Some(value)),
+            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(e) => Err(AppError::Auth(format!("Keychain read error: {}", e))),
+        }
+    }
+
+    pub fn delete_secret(key: &str) -> Result<(), AppError> {
+        let entry = Entry::new(SERVICE_NAME, key)
             .map_err(|e| AppError::Auth(format!("Keychain entry error: {}", e)))?;
         match entry.delete_password() {
             Ok(()) | Err(keyring::Error::NoEntry) => {}

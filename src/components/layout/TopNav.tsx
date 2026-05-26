@@ -4,6 +4,7 @@ import { useAuthStore } from "@/store/authStore";
 import { signOut } from "@/lib/tauri";
 import {
   Bell,
+  BookOpen,
   Calendar,
   Cloud,
   ExternalLink,
@@ -30,6 +31,7 @@ import {
 import { cn } from "@/lib/utils";
 import appIcon from "@/assets/app-icon.png";
 import IntegrationsSettings from "@/components/settings/IntegrationsSettings";
+import HelpGuide from "@/components/help/HelpGuide";
 import { OPEN_INTEGRATIONS_SETTINGS_EVENT } from "@/lib/appSettings";
 
 const APPS = [
@@ -64,6 +66,7 @@ export default function TopNav() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [accountOpen, setAccountOpen] = useState(false);
   const [integrationsOpen, setIntegrationsOpen] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -251,6 +254,15 @@ export default function TopNav() {
                   setSettingsOpen(false);
                 }}
               />
+              <MenuButton
+                icon={BookOpen}
+                label="Help & Documentation"
+                detail="Feature guide for all integrations"
+                onClick={() => {
+                  setHelpOpen(true);
+                  setSettingsOpen(false);
+                }}
+              />
             </Dropdown>
           )}
         </div>
@@ -330,6 +342,7 @@ export default function TopNav() {
         </div>
       </div>
       <IntegrationsSettings open={integrationsOpen} onClose={() => setIntegrationsOpen(false)} />
+      <HelpGuide open={helpOpen} onClose={() => setHelpOpen(false)} />
     </div>
   );
 }

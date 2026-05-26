@@ -16,7 +16,11 @@ pub struct DocContent {
 }
 
 fn validate_drive_id(id: &str) -> Result<(), AppError> {
-    if id.is_empty() || !id.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_') {
+    if id.is_empty()
+        || !id
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+    {
         return Err(AppError::Auth(format!("Invalid Drive/Docs ID: {}", id)));
     }
     Ok(())

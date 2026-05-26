@@ -1,9 +1,10 @@
 import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Mic2, Loader2, Users, Clock, Calendar, Sparkles, CheckSquare, FolderInput } from "lucide-react";
+import { Mic2, Loader2, Users, Clock, Calendar, Sparkles, CheckSquare, FolderInput, KeyRound } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { listFirefliesMeetings, getFirefliesMeeting, listFirefliesChannels, moveFirefliesMeetings } from "@/lib/tauri";
+import { listFirefliesMeetings, getFirefliesMeeting, listFirefliesChannels, moveFirefliesMeetings, getFirefliesApiKeyStatus } from "@/lib/tauri";
 import { setGeminiContext, clearGeminiContext } from "@/lib/geminiContextBridge";
+import { openIntegrationsSettings } from "@/lib/appSettings";
 import { useUIStore } from "@/store/uiStore";
 import type { FirefliesMeeting, FirefliesChannel } from "@/types";
 
@@ -355,15 +356,25 @@ export default function FirefliesView() {
     return () => clearGeminiContext();
   }, []);
 
-  const { data: meetings, isLoading } = useQuery<FirefliesMeeting[]>({
+  const firefliesKeyStatus = useQuery({
+    queryKey: ["fireflies-api-key-status"],
+    queryFn: getFirefliesApiKeyStatus,
+    staleTime: 60_000,
+  });
+
+  const apiKeyConfigured = firefliesKeyStatus.data === true;
+
+  const { data: meetings, isLoading, error: meetingsError } = useQuery<FirefliesMeeting[]>({
     queryKey: ["fireflies-meetings"],
     queryFn: () => listFirefliesMeetings(50),
+    enabled: apiKeyConfigured,
     staleTime: 5 * 60_000,
   });
 
   const { data: channels } = useQuery<FirefliesChannel[]>({
     queryKey: ["fireflies-channels"],
     queryFn: () => listFirefliesChannels(),
+    enabled: apiKeyConfigured,
     staleTime: 10 * 60_000,
   });
 
@@ -386,6 +397,36 @@ export default function FirefliesView() {
     ? channelList.find((c) => c.id === firefliesChannelId)?.title ?? "Folder"
     : null;
 
+  if (firefliesKeyStatus.isLoading) {
+    return (
+      <div className="flex h-full items-center justify-center" style={{ background: "var(--c-bg)" }}>
+        <Loader2 className="w-6 h-6 animate-spin text-blue-400" />
+      </div>
+    );
+  }
+
+  if (!apiKeyConfigured) {
+    return (
+      <div className="flex h-full items-center justify-center px-6" style={{ background: "var(--c-bg)" }}>
+        <div className="max-w-md rounded-[32px] border border-white/10 bg-gray-900 p-8 text-center shadow-2xl">
+          <div className="w-16 h-16 rounded-[24px] bg-blue-600/10 border border-blue-400/20 flex items-center justify-center mx-auto mb-5">
+            <KeyRound className="w-8 h-8 text-blue-400" />
+          </div>
+          <h2 className="text-sm font-black text-white uppercase tracking-[0.25em] mb-3">Connect Fireflies</h2>
+          <p className="text-xs font-bold text-gray-400 leading-relaxed mb-6">
+            Fireflies uses an API key, not an OAuth prompt. Add your key in Settings → Integrations and meetings will load from Fireflies directly.
+          </p>
+          <button
+            onClick={openIntegrationsSettings}
+            className="px-5 py-3 rounded-2xl bg-blue-600 text-white text-[10px] font-black uppercase tracking-widest shadow-xl active:scale-95 transition-transform"
+          >
+            Add Fireflies API Key
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex h-full overflow-hidden" style={{ background: "var(--c-bg)" }}>
       {/* Left pane */}
@@ -402,6 +443,17 @@ export default function FirefliesView() {
           {isLoading ? (
             <div className="flex justify-center py-8">
               <Loader2 className="w-4 h-4 animate-spin text-blue-400" />
+            </div>
+          ) : meetingsError ? (
+            <div className="px-4 py-8 text-center">
+              <p className="text-[10px] font-black uppercase tracking-widest text-red-400 mb-3">Fireflies failed to load</p>
+              <p className="text-[10px] font-bold text-gray-500 leading-relaxed mb-4">{String(meetingsError)}</p>
+              <button
+                onClick={openIntegrationsSettings}
+                className="px-4 py-2 rounded-xl bg-gray-900 text-white text-[9px] font-black uppercase tracking-widest"
+              >
+                Check API Key
+              </button>
             </div>
           ) : filteredMeetings.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-12 opacity-20 px-4">

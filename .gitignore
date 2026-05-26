@@ -31,3 +31,9 @@ GEMINI.md
 MEMORY.md
 SKILL.md
 UNIVERSAL_SWARM_RULES.md
+
+# Release artifacts
+release/
+*.dmg
+src-tauri/target/
+.claude/*.lock

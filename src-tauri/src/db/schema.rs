@@ -136,6 +136,9 @@ CREATE TABLE IF NOT EXISTS kg_crawl_state (
     total_files         INTEGER NOT NULL DEFAULT 0,
     crawled_files       INTEGER NOT NULL DEFAULT 0,
     enriched_files      INTEGER NOT NULL DEFAULT 0,
+    active_page_token   TEXT,
+    active_drive_id     TEXT,
+    last_activity_at    INTEGER,
     error_message       TEXT
 );
 

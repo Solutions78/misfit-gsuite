@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
@@ -37,25 +39,38 @@ fn build_drive_system_prompt(name: &str, email: &str, ctx: &ViewContext) -> Stri
         "drive" => "Google Drive file browser".to_string(),
         "docs" => format!(
             "Google Docs editor{}",
-            ctx.open_doc_id.as_ref().map(|id| format!(" (document ID: {})", id)).unwrap_or_default()
+            ctx.open_doc_id
+                .as_ref()
+                .map(|id| format!(" (document ID: {})", id))
+                .unwrap_or_default()
         ),
         "sheets" => format!(
             "Google Sheets{}",
-            ctx.open_doc_id.as_ref().map(|id| format!(" (spreadsheet ID: {})", id)).unwrap_or_default()
+            ctx.open_doc_id
+                .as_ref()
+                .map(|id| format!(" (spreadsheet ID: {})", id))
+                .unwrap_or_default()
         ),
         "slides" => format!(
             "Google Slides{}",
-            ctx.open_doc_id.as_ref().map(|id| format!(" (presentation ID: {})", id)).unwrap_or_default()
+            ctx.open_doc_id
+                .as_ref()
+                .map(|id| format!(" (presentation ID: {})", id))
+                .unwrap_or_default()
         ),
         v => v.to_string(),
     };
 
-    let folder_info = ctx.current_folder_id.as_ref()
+    let folder_info = ctx
+        .current_folder_id
+        .as_ref()
         .filter(|id| *id != "root")
         .map(|id| format!(" The user is currently browsing folder ID: {}.", id))
         .unwrap_or_default();
 
-    let drive_info = ctx.drive_id.as_ref()
+    let drive_info = ctx
+        .drive_id
+        .as_ref()
         .map(|id| format!(" They are in shared drive ID: {}.", id))
         .unwrap_or_default();
 
@@ -88,7 +103,9 @@ pub async fn gemini_drive_chat(
 
     // Build view context string — inject the currently open doc ID so Gemini
     // can immediately call get_document_content without asking for the file ID
-    let view_ctx_str = if let (Some(doc_id), Some(mime)) = (&view_context.open_doc_id, &view_context.open_doc_mime_type) {
+    let view_ctx_str = if let (Some(doc_id), Some(mime)) =
+        (&view_context.open_doc_id, &view_context.open_doc_mime_type)
+    {
         Some(format!(
             "The user currently has the following file open: ID={}, mimeType={}. \
             If they ask to summarize, read, or analyze 'this document' or 'the current file', \
@@ -99,15 +116,10 @@ pub async fn gemini_drive_chat(
         None
     };
 
-    let (text, file_results) = gemini::generate_with_tools(
-        &api,
-        messages,
-        Some(system),
-        model,
-        view_ctx_str,
-    )
-    .await
-    .map_err(|e| e.to_string())?;
+    let (text, file_results) =
+        gemini::generate_with_tools(&api, messages, Some(system), model, view_ctx_str)
+            .await
+            .map_err(|e| e.to_string())?;
 
     let mapped_files = file_results
         .into_iter()

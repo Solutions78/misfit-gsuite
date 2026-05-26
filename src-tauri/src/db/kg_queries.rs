@@ -63,6 +63,9 @@ pub struct KgCrawlState {
     pub total_files: i64,
     pub crawled_files: i64,
     pub enriched_files: i64,
+    pub active_page_token: Option<String>,
+    pub active_drive_id: Option<String>,
+    pub last_activity_at: Option<i64>,
     pub error_message: Option<String>,
 }
 
@@ -244,7 +247,9 @@ pub fn mark_enrichment_done_no_content(conn: &Connection, file_id: &str) -> Resu
     Ok(())
 }
 
+#[allow(dead_code)]
 pub fn delete_kg_node(conn: &Connection, file_id: &str) -> Result<(), AppError> {
+    delete_kg_edges_for_node(conn, file_id)?;
     conn.execute("DELETE FROM kg_nodes WHERE file_id = ?1", params![file_id])?;
     Ok(())
 }
@@ -269,6 +274,7 @@ pub fn insert_kg_edge(
     Ok(())
 }
 
+#[allow(dead_code)]
 pub fn delete_kg_edges_for_node(conn: &Connection, file_id: &str) -> Result<(), AppError> {
     conn.execute(
         "DELETE FROM kg_edges WHERE source_id = ?1 OR target_id = ?1",
@@ -305,7 +311,17 @@ pub fn get_kg_graph(conn: &Connection) -> Result<KgGraphPayload, AppError> {
         })?
         .filter_map(|r| r.ok())
         .map(
-            |(file_id, name, mime_type, web_view_link, drive_id, tags_json, score, summary, ents_json)| {
+            |(
+                file_id,
+                name,
+                mime_type,
+                web_view_link,
+                drive_id,
+                tags_json,
+                score,
+                summary,
+                ents_json,
+            )| {
                 let topic_tags: Vec<String> = tags_json
                     .and_then(|j| serde_json::from_str(&j).ok())
                     .unwrap_or_default();
@@ -327,9 +343,8 @@ pub fn get_kg_graph(conn: &Connection) -> Result<KgGraphPayload, AppError> {
         )
         .collect::<Vec<_>>();
 
-    let mut estmt = conn.prepare(
-        "SELECT source_id, target_id, edge_type, weight, label FROM kg_edges",
-    )?;
+    let mut estmt =
+        conn.prepare("SELECT source_id, target_id, edge_type, weight, label FROM kg_edges")?;
     let edges = estmt
         .query_map([], |row| {
             Ok(KgEdgeView {
@@ -351,7 +366,8 @@ pub fn get_kg_graph(conn: &Connection) -> Result<KgGraphPayload, AppError> {
 pub fn get_crawl_state(conn: &Connection) -> Result<KgCrawlState, AppError> {
     let mut stmt = conn.prepare(
         "SELECT changes_page_token, last_crawl_at, last_delta_at,
-                crawl_status, total_files, crawled_files, enriched_files, error_message
+                crawl_status, total_files, crawled_files, enriched_files,
+                active_page_token, active_drive_id, last_activity_at, error_message
          FROM kg_crawl_state WHERE id = 1",
     )?;
     let state = stmt.query_row([], |row| {
@@ -363,7 +379,10 @@ pub fn get_crawl_state(conn: &Connection) -> Result<KgCrawlState, AppError> {
             total_files: row.get(4)?,
             crawled_files: row.get(5)?,
             enriched_files: row.get(6)?,
-            error_message: row.get(7)?,
+            active_page_token: row.get(7)?,
+            active_drive_id: row.get(8)?,
+            last_activity_at: row.get(9)?,
+            error_message: row.get(10)?,
         })
     })?;
     Ok(state)
@@ -379,7 +398,10 @@ pub fn update_crawl_state(conn: &Connection, state: &KgCrawlState) -> Result<(),
             total_files = ?5,
             crawled_files = ?6,
             enriched_files = ?7,
-            error_message = ?8
+            active_page_token = ?8,
+            active_drive_id = ?9,
+            last_activity_at = ?10,
+            error_message = ?11
          WHERE id = 1",
         params![
             state.changes_page_token,
@@ -389,6 +411,9 @@ pub fn update_crawl_state(conn: &Connection, state: &KgCrawlState) -> Result<(),
             state.total_files,
             state.crawled_files,
             state.enriched_files,
+            state.active_page_token,
+            state.active_drive_id,
+            state.last_activity_at,
             state.error_message,
         ],
     )?;
@@ -401,10 +426,6 @@ pub fn get_pending_enrichment_count(conn: &Connection) -> Result<i64, AppError> 
         [],
         |row| row.get(0),
     )?)
-}
-
-pub fn get_total_node_count(conn: &Connection) -> Result<i64, AppError> {
-    Ok(conn.query_row("SELECT COUNT(*) FROM kg_nodes", [], |row| row.get(0))?)
 }
 
 pub fn get_done_enrichment_count(conn: &Connection) -> Result<i64, AppError> {

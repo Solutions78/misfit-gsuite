@@ -1,5 +1,6 @@
 use crate::error::AppError;
 use serde::{Deserialize, Serialize};
+use tracing::{debug, error, warn};
 
 #[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -40,7 +41,16 @@ pub struct SlackFile {
     pub title: Option<String>,
     pub mimetype: Option<String>,
     pub url_private: Option<String>,
+    pub url_private_download: Option<String>,
     pub permalink: Option<String>,
+    pub thumb_64: Option<String>,
+    pub thumb_80: Option<String>,
+    pub thumb_160: Option<String>,
+    pub thumb_360: Option<String>,
+    pub thumb_480: Option<String>,
+    pub thumb_720: Option<String>,
+    pub thumb_960: Option<String>,
+    pub thumb_1024: Option<String>,
 }
 
 #[allow(dead_code)]
@@ -62,6 +72,10 @@ pub struct SlackMessage {
 #[serde(rename_all = "camelCase")]
 pub struct SlackProfile {
     pub display_name: Option<String>,
+    pub display_name_normalized: Option<String>,
+    pub real_name: Option<String>,
+    pub real_name_normalized: Option<String>,
+    pub image_48: Option<String>,
     pub image_72: Option<String>,
     pub email: Option<String>,
 }
@@ -158,8 +172,8 @@ struct SlackChannelListRaw {
 #[derive(Debug, Deserialize)]
 struct SlackChannelRaw {
     id: String,
-    name: Option<String>,   // absent on IM/MPIM channels
-    user: Option<String>,   // present on IM channels instead of name
+    name: Option<String>, // absent on IM/MPIM channels
+    user: Option<String>, // present on IM channels instead of name
     is_private: Option<bool>,
     is_im: Option<bool>,
     is_mpim: Option<bool>,
@@ -213,7 +227,16 @@ struct SlackFileRaw {
     title: Option<String>,
     mimetype: Option<String>,
     url_private: Option<String>,
+    url_private_download: Option<String>,
     permalink: Option<String>,
+    thumb_64: Option<String>,
+    thumb_80: Option<String>,
+    thumb_160: Option<String>,
+    thumb_360: Option<String>,
+    thumb_480: Option<String>,
+    thumb_720: Option<String>,
+    thumb_960: Option<String>,
+    thumb_1024: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -234,6 +257,10 @@ struct SlackUserRaw {
 #[derive(Debug, Deserialize)]
 struct SlackProfileRaw {
     display_name: Option<String>,
+    display_name_normalized: Option<String>,
+    real_name: Option<String>,
+    real_name_normalized: Option<String>,
+    image_48: Option<String>,
     image_72: Option<String>,
     email: Option<String>,
 }
@@ -271,7 +298,10 @@ pub async fn exchange_code(
     let status = resp.status().as_u16();
     if !resp.status().is_success() {
         let text = resp.text().await.unwrap_or_default();
-        return Err(AppError::Api { status, message: text });
+        return Err(AppError::Api {
+            status,
+            message: text,
+        });
     }
 
     let raw: SlackOAuthResponse = resp.json().await?;
@@ -318,16 +348,15 @@ pub async fn list_channels(
         }
     }
 
-    let resp = http
-        .get(&url)
-        .bearer_auth(user_token)
-        .send()
-        .await?;
+    let resp = http.get(&url).bearer_auth(user_token).send().await?;
 
     let status = resp.status().as_u16();
     if !resp.status().is_success() {
         let text = resp.text().await.unwrap_or_default();
-        return Err(AppError::Api { status, message: text });
+        return Err(AppError::Api {
+            status,
+            message: text,
+        });
     }
 
     let raw: SlackChannelListRaw = resp.json().await?;
@@ -341,7 +370,8 @@ pub async fn list_channels(
             let is_im = c.is_im.unwrap_or(false);
             let is_mpim = c.is_mpim.unwrap_or(false);
             // IM channels have no name — use the peer user ID or a placeholder
-            let name = c.name
+            let name = c
+                .name
                 .unwrap_or_else(|| c.user.clone().unwrap_or_else(|| c.id.clone()));
             SlackChannel {
                 id: c.id,
@@ -362,7 +392,10 @@ pub async fn list_channels(
         .and_then(|m| m.next_cursor)
         .filter(|s| !s.is_empty());
 
-    Ok(SlackChannelListResponse { channels, next_cursor })
+    Ok(SlackChannelListResponse {
+        channels,
+        next_cursor,
+    })
 }
 
 /// Get message history for a channel.
@@ -389,16 +422,15 @@ pub async fn get_channel_history(
         }
     }
 
-    let resp = http
-        .get(&url)
-        .bearer_auth(user_token)
-        .send()
-        .await?;
+    let resp = http.get(&url).bearer_auth(user_token).send().await?;
 
     let status = resp.status().as_u16();
     if !resp.status().is_success() {
         let text = resp.text().await.unwrap_or_default();
-        return Err(AppError::Api { status, message: text });
+        return Err(AppError::Api {
+            status,
+            message: text,
+        });
     }
 
     let raw: SlackHistoryRaw = resp.json().await?;
@@ -415,7 +447,10 @@ pub async fn get_channel_history(
             reply_count: m.reply_count,
             reactions: m.reactions.map(|rs| {
                 rs.into_iter()
-                    .map(|r| SlackReaction { name: r.name, count: r.count })
+                    .map(|r| SlackReaction {
+                        name: r.name,
+                        count: r.count,
+                    })
                     .collect()
             }),
             files: m.files.map(|fs| {
@@ -426,7 +461,16 @@ pub async fn get_channel_history(
                         title: f.title,
                         mimetype: f.mimetype,
                         url_private: f.url_private,
+                        url_private_download: f.url_private_download,
                         permalink: f.permalink,
+                        thumb_64: f.thumb_64,
+                        thumb_80: f.thumb_80,
+                        thumb_160: f.thumb_160,
+                        thumb_360: f.thumb_360,
+                        thumb_480: f.thumb_480,
+                        thumb_720: f.thumb_720,
+                        thumb_960: f.thumb_960,
+                        thumb_1024: f.thumb_1024,
                     })
                     .collect()
             }),
@@ -447,6 +491,77 @@ pub async fn get_channel_history(
     })
 }
 
+/// Fetch a private Slack file through the backend so the request can include
+/// the Slack bearer token. Browser <img> tags cannot attach that auth header.
+#[allow(dead_code)]
+pub async fn fetch_file_data_url(
+    http: &reqwest::Client,
+    user_token: &str,
+    file_url: &str,
+) -> Result<String, AppError> {
+    debug!("Fetching Slack file: {}", file_url);
+
+    let parsed = url::Url::parse(file_url)
+        .map_err(|e| AppError::Other(format!("Invalid Slack file URL: {}", e)))?;
+
+    if parsed.scheme() != "https" {
+        return Err(AppError::Other("Slack file URL must use HTTPS".into()));
+    }
+
+    let host = parsed.host_str().unwrap_or_default();
+    // Broaden whitelist to include all common Slack asset domains
+    let is_slack_host = host == "slack.com"
+        || host.ends_with(".slack.com")
+        || host == "slack-edge.com"
+        || host.ends_with(".slack-edge.com")
+        || host == "slack-imgs.com"
+        || host.ends_with(".slack-imgs.com")
+        || host == "slack-core.com"
+        || host.ends_with(".slack-core.com")
+        || host == "slack-redir.net"
+        || host.ends_with(".slack-redir.net");
+
+    if !is_slack_host {
+        warn!("Refusing to fetch non-Slack file host: {}", host);
+        return Err(AppError::Other(format!(
+            "Refusing to fetch non-Slack file host: {}",
+            host
+        )));
+    }
+
+    let resp = http.get(file_url).bearer_auth(user_token).send().await?;
+
+    let status = resp.status().as_u16();
+    if !resp.status().is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        error!("Slack file fetch failed: {} - {}", status, text);
+        return Err(AppError::Api {
+            status,
+            message: text,
+        });
+    }
+
+    let content_type = resp
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.split(';').next())
+        .filter(|v| !v.trim().is_empty())
+        .unwrap_or("application/octet-stream")
+        .trim()
+        .to_string();
+
+    debug!("Fetched file content type: {}", content_type);
+    let bytes = resp.bytes().await?;
+
+    use base64::{engine::general_purpose::STANDARD, Engine};
+    Ok(format!(
+        "data:{};base64,{}",
+        content_type,
+        STANDARD.encode(bytes)
+    ))
+}
+
 /// Get info for a single Slack user.
 #[allow(dead_code)]
 pub async fn get_user(
@@ -456,16 +571,15 @@ pub async fn get_user(
 ) -> Result<SlackUser, AppError> {
     let url = format!("https://slack.com/api/users.info?user={}", user_id);
 
-    let resp = http
-        .get(&url)
-        .bearer_auth(user_token)
-        .send()
-        .await?;
+    let resp = http.get(&url).bearer_auth(user_token).send().await?;
 
     let status = resp.status().as_u16();
     if !resp.status().is_success() {
         let text = resp.text().await.unwrap_or_default();
-        return Err(AppError::Api { status, message: text });
+        return Err(AppError::Api {
+            status,
+            message: text,
+        });
     }
 
     let raw: SlackUserInfoRaw = resp.json().await?;
@@ -477,6 +591,10 @@ pub async fn get_user(
 
     let profile = u.profile.unwrap_or(SlackProfileRaw {
         display_name: None,
+        display_name_normalized: None,
+        real_name: None,
+        real_name_normalized: None,
+        image_48: None,
         image_72: None,
         email: None,
     });
@@ -487,6 +605,10 @@ pub async fn get_user(
         real_name: u.real_name,
         profile: SlackProfile {
             display_name: profile.display_name,
+            display_name_normalized: profile.display_name_normalized,
+            real_name: profile.real_name,
+            real_name_normalized: profile.real_name_normalized,
+            image_48: profile.image_48,
             image_72: profile.image_72,
             email: profile.email,
         },
@@ -513,7 +635,10 @@ pub async fn post_message(
     let status = resp.status().as_u16();
     if !resp.status().is_success() {
         let text = resp.text().await.unwrap_or_default();
-        return Err(AppError::Api { status, message: text });
+        return Err(AppError::Api {
+            status,
+            message: text,
+        });
     }
 
     let raw: SlackBaseResponse = resp.json().await?;

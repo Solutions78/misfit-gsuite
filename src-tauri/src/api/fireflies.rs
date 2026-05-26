@@ -1,6 +1,8 @@
 use crate::error::AppError;
 use serde::{Deserialize, Serialize};
 
+const FIREFLIES_GRAPHQL_URL: &str = "https://api.fireflies.ai/graphql";
+
 #[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -92,12 +94,6 @@ struct FirefliesChannelRaw {
 }
 
 #[derive(Debug, Deserialize)]
-struct UpdateMeetingChannelData {
-    #[allow(dead_code)]
-    update_meeting_channel: Option<serde_json::Value>,
-}
-
-#[derive(Debug, Deserialize)]
 struct FirefliesMeetingRaw {
     id: String,
     title: Option<String>,
@@ -108,7 +104,12 @@ struct FirefliesMeetingRaw {
     sentences: Option<Vec<FirefliesSentenceRaw>>,
     participants: Option<Vec<String>>,
     video_url: Option<String>,
-    channel_id: Option<String>,
+    channels: Option<Vec<FirefliesChannelRefRaw>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct FirefliesChannelRefRaw {
+    id: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -154,25 +155,21 @@ fn raw_to_meeting(r: FirefliesMeetingRaw) -> FirefliesMeeting {
         }),
         participants: r.participants,
         video_url: r.video_url,
-        channel_id: r.channel_id,
+        channel_id: r
+            .channels
+            .and_then(|channels| channels.into_iter().next())
+            .map(|channel| channel.id),
     }
 }
 
-/// List recent Fireflies meetings via the proxy.
-#[allow(dead_code)]
-pub async fn list_meetings(
+async fn post_graphql<T: for<'de> Deserialize<'de>>(
     http: &reqwest::Client,
-    proxy_base: &str,
-    app_token: &str,
-    limit: u32,
-) -> Result<Vec<FirefliesMeeting>, AppError> {
-    let url = format!("{}/fireflies/graphql", proxy_base);
-    let query = "query ListTranscripts($limit: Int!) { transcripts(limit: $limit) { id title date duration participants video_url channel_id summary { keywords action_items outline overview short_summary } } }";
-    let body = serde_json::json!({ "query": query, "variables": { "limit": limit } });
-
+    api_key: &str,
+    body: serde_json::Value,
+) -> Result<GqlResponse<T>, AppError> {
     let resp = http
-        .post(&url)
-        .header("X-App-Token", app_token)
+        .post(FIREFLIES_GRAPHQL_URL)
+        .bearer_auth(api_key)
         .json(&body)
         .send()
         .await?;
@@ -180,19 +177,41 @@ pub async fn list_meetings(
     let status = resp.status().as_u16();
     if !resp.status().is_success() {
         let text = resp.text().await.unwrap_or_default();
-        return Err(AppError::Api { status, message: text });
+        return Err(AppError::Api {
+            status,
+            message: text,
+        });
     }
 
-    let raw: GqlResponse<TranscriptsData> = resp.json().await?;
+    let raw: GqlResponse<T> = resp.json().await?;
 
-    if let Some(errors) = raw.errors {
+    if let Some(errors) = &raw.errors {
         if !errors.is_empty() {
             return Err(AppError::Api {
                 status: 400,
-                message: errors.into_iter().map(|e| e.message).collect::<Vec<_>>().join("; "),
+                message: errors
+                    .iter()
+                    .map(|e| e.message.clone())
+                    .collect::<Vec<_>>()
+                    .join("; "),
             });
         }
     }
+
+    Ok(raw)
+}
+
+/// List recent Fireflies meetings directly with the user's Fireflies API key.
+#[allow(dead_code)]
+pub async fn list_meetings(
+    http: &reqwest::Client,
+    api_key: &str,
+    limit: u32,
+) -> Result<Vec<FirefliesMeeting>, AppError> {
+    let query = "query ListTranscripts($limit: Int!) { transcripts(limit: $limit) { id title date duration participants video_url channels { id } summary { keywords action_items outline overview short_summary } } }";
+    let body = serde_json::json!({ "query": query, "variables": { "limit": limit } });
+
+    let raw: GqlResponse<TranscriptsData> = post_graphql(http, api_key, body).await?;
 
     let meetings = raw
         .data
@@ -205,41 +224,17 @@ pub async fn list_meetings(
     Ok(meetings)
 }
 
-/// Get a single Fireflies meeting by ID via the proxy.
+/// Get a single Fireflies meeting by ID directly with the user's Fireflies API key.
 #[allow(dead_code)]
 pub async fn get_meeting(
     http: &reqwest::Client,
-    proxy_base: &str,
-    app_token: &str,
+    api_key: &str,
     id: &str,
 ) -> Result<FirefliesMeeting, AppError> {
-    let url = format!("{}/fireflies/graphql", proxy_base);
-    let query = "query GetTranscript($id: String!) { transcript(id: $id) { id title date duration participants video_url channel_id summary { keywords action_items outline overview short_summary } sentences { index speaker_name text start_time } } }";
+    let query = "query GetTranscript($id: String!) { transcript(id: $id) { id title date duration participants video_url channels { id } summary { keywords action_items outline overview short_summary } sentences { index speaker_name text start_time } } }";
     let body = serde_json::json!({ "query": query, "variables": { "id": id } });
 
-    let resp = http
-        .post(&url)
-        .header("X-App-Token", app_token)
-        .json(&body)
-        .send()
-        .await?;
-
-    let status = resp.status().as_u16();
-    if !resp.status().is_success() {
-        let text = resp.text().await.unwrap_or_default();
-        return Err(AppError::Api { status, message: text });
-    }
-
-    let raw: GqlResponse<TranscriptData> = resp.json().await?;
-
-    if let Some(errors) = raw.errors {
-        if !errors.is_empty() {
-            return Err(AppError::Api {
-                status: 400,
-                message: errors.into_iter().map(|e| e.message).collect::<Vec<_>>().join("; "),
-            });
-        }
-    }
+    let raw: GqlResponse<TranscriptData> = post_graphql(http, api_key, body).await?;
 
     let meeting = raw
         .data
@@ -249,41 +244,17 @@ pub async fn get_meeting(
     Ok(raw_to_meeting(meeting))
 }
 
-/// List Fireflies channels (folders) via the proxy.
+/// List Fireflies channels (folders) directly with the user's Fireflies API key.
 #[allow(dead_code)]
 pub async fn list_channels(
     http: &reqwest::Client,
-    proxy_base: &str,
-    app_token: &str,
+    api_key: &str,
 ) -> Result<Vec<FirefliesChannel>, AppError> {
-    let url = format!("{}/fireflies/graphql", proxy_base);
     let body = serde_json::json!({
         "query": "{ channels { id title is_private } }"
     });
 
-    let resp = http
-        .post(&url)
-        .header("X-App-Token", app_token)
-        .json(&body)
-        .send()
-        .await?;
-
-    let status = resp.status().as_u16();
-    if !resp.status().is_success() {
-        let text = resp.text().await.unwrap_or_default();
-        return Err(AppError::Api { status, message: text });
-    }
-
-    let raw: GqlResponse<ChannelsData> = resp.json().await?;
-
-    if let Some(errors) = raw.errors {
-        if !errors.is_empty() {
-            return Err(AppError::Api {
-                status: 400,
-                message: errors.into_iter().map(|e| e.message).collect::<Vec<_>>().join("; "),
-            });
-        }
-    }
+    let raw: GqlResponse<ChannelsData> = post_graphql(http, api_key, body).await?;
 
     let channels = raw
         .data
@@ -300,16 +271,14 @@ pub async fn list_channels(
     Ok(channels)
 }
 
-/// Move up to 5 meetings into a channel via the proxy.
+/// Move meetings into a Fireflies channel directly with the user's Fireflies API key.
 #[allow(dead_code)]
 pub async fn move_meetings_to_channel(
     http: &reqwest::Client,
-    proxy_base: &str,
-    app_token: &str,
+    api_key: &str,
     transcript_ids: &[String],
     channel_id: &str,
 ) -> Result<(), AppError> {
-    let url = format!("{}/fireflies/graphql", proxy_base);
     let query = "mutation MoveMeetings($transcript_ids: [String!]!, $channel_id: String!) { updateMeetingChannel(transcript_ids: $transcript_ids, channel_id: $channel_id) { id } }";
     let body = serde_json::json!({
         "query": query,
@@ -319,29 +288,7 @@ pub async fn move_meetings_to_channel(
         }
     });
 
-    let resp = http
-        .post(&url)
-        .header("X-App-Token", app_token)
-        .json(&body)
-        .send()
-        .await?;
-
-    let status = resp.status().as_u16();
-    if !resp.status().is_success() {
-        let text = resp.text().await.unwrap_or_default();
-        return Err(AppError::Api { status, message: text });
-    }
-
-    let raw: GqlResponse<serde_json::Value> = resp.json().await?;
-
-    if let Some(errors) = raw.errors {
-        if !errors.is_empty() {
-            return Err(AppError::Api {
-                status: 400,
-                message: errors.into_iter().map(|e| e.message).collect::<Vec<_>>().join("; "),
-            });
-        }
-    }
+    let _raw: GqlResponse<serde_json::Value> = post_graphql(http, api_key, body).await?;
 
     Ok(())
 }

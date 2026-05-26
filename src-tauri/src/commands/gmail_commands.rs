@@ -2,8 +2,8 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::api::gmail::{
-    self, EmailView, GmailMessage, Label, MessageBody, MessageHeader, MessagePart,
-    Thread, ThreadListResponse, ThreadSummary, ThreadSummaryPage,
+    self, EmailView, GmailMessage, Label, MessageBody, MessageHeader, MessagePart, Thread,
+    ThreadListResponse, ThreadSummary, ThreadSummaryPage,
 };
 use crate::db::queries::{self, CachedMessage, CachedThreadSummary};
 use crate::AppState;

@@ -2,11 +2,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tauri::State;
 
-use crate::api::gemini::GeminiMessage;
+use crate::api::gemini::{self, GeminiMessage};
 use crate::AppState;
-
-const GEMINI_URL: &str =
-    "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent";
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Part {
@@ -34,9 +31,17 @@ pub async fn gemini_chat_with_search(
     messages: Vec<GeminiMessage>,
     context: Option<String>,
     web_search: bool,
+    model: Option<String>,
 ) -> Result<String, String> {
     let api = state.api.read().await;
     let token = api.access_token().await.map_err(|e| e.to_string())?;
+    let model_name = match model {
+        Some(model) if !model.trim().is_empty() => gemini::normalize_model_name(&model),
+        _ => gemini::pick_default_model(&api)
+            .await
+            .map_err(|e| e.to_string())?,
+    };
+    let url = gemini::generate_content_url(&model_name);
 
     // Build system instruction from context if provided
     let system_instruction = context.map(|ctx| Content {
@@ -66,19 +71,25 @@ pub async fn gemini_chat_with_search(
         tools,
     };
 
-    let resp: Value = api
+    let resp = api
         .http
-        .post(GEMINI_URL)
+        .post(&url)
         .bearer_auth(&token)
         .json(&body)
         .send()
         .await
-        .map_err(|e| e.to_string())?
-        .error_for_status()
-        .map_err(|e| e.to_string())?
-        .json()
-        .await
         .map_err(|e| e.to_string())?;
+
+    if !resp.status().is_success() {
+        let status = resp.status().as_u16();
+        let text = resp.text().await.unwrap_or_default();
+        return Err(format!(
+            "Gemini model {} failed with {}: {}",
+            model_name, status, text
+        ));
+    }
+
+    let resp: Value = resp.json().await.map_err(|e| e.to_string())?;
 
     // Extract text from first candidate's first part
     let text = resp

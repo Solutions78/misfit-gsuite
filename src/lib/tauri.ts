@@ -39,19 +39,34 @@ import type {
 } from "@/types";
 import type { DriveViewContext } from "@/lib/geminiContextBridge";
 
-const IS_DEV = import.meta.env.DEV;
-
 async function loggedInvoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
-  if (IS_DEV) dbg("Tauri", `invoke: ${command}`, args ?? {});
+  dbg("Tauri", `invoke: ${command}`, args ?? {});
   try {
     const result = await invoke<T>(command, args);
-    if (IS_DEV) dbg("Tauri", `success: ${command}`, result);
+    dbg("Tauri", `success: ${command}`, result);
     return result;
   } catch (error) {
-    if (IS_DEV) dbg("Tauri", `error: ${command}`, error);
+    dbg("Tauri", `error: ${command}`, error);
     throw error;
   }
 }
+
+// ── Setup ─────────────────────────────────────────────────────────────────
+
+export const hasAppCredentials = () =>
+  loggedInvoke<boolean>("has_app_credentials");
+
+export const saveAppCredentials = (clientId: string, clientSecret: string) =>
+  loggedInvoke<void>("save_app_credentials", { clientId, clientSecret });
+
+export const getLogFilePath = () =>
+  loggedInvoke<string>("get_log_file_path");
+
+export const readRecentLogs = (maxLines = 400) =>
+  loggedInvoke<string>("read_recent_logs", { maxLines });
+
+export const clearLogs = () =>
+  loggedInvoke<void>("clear_logs");
 
 // ── Auth ──────────────────────────────────────────────────────────────────
 
@@ -339,3 +354,9 @@ export const getKgGraph = () =>
 
 export const getKgNode = (fileId: string) =>
   loggedInvoke<KgNode | null>("get_kg_node", { fileId });
+
+export const getKgTier = () =>
+  loggedInvoke<string>("get_kg_tier");
+
+export const setKgTier = (tier: string) =>
+  loggedInvoke<void>("set_kg_tier", { tier });

@@ -1,21 +1,55 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 import { Mail, Loader2 } from "lucide-react";
-import { startOAuthFlow } from "@/lib/tauri";
+import { getCurrentAccount, startOAuthFlow } from "@/lib/tauri";
 import { useAuthStore } from "@/store/authStore";
 import TitleBar from "@/components/layout/TitleBar";
+import { dbg } from "@/lib/debugLog";
 
 export default function LoginScreen() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const { addAccount } = useAuthStore();
 
+  useEffect(() => {
+    let isMounted = true;
+    let unlisten: (() => void) | undefined;
+
+    listen<string>("auth::complete", async () => {
+      dbg("Login", "auth::complete received; restoring account");
+      try {
+        const account = await getCurrentAccount();
+        if (isMounted && account) {
+          addAccount(account);
+          dbg("Login", "account restored from auth::complete", account.email);
+        }
+      } catch (e) {
+        dbg("Login", "failed to restore after auth::complete", e);
+        if (isMounted) setError(String(e));
+      } finally {
+        if (isMounted) setLoading(false);
+      }
+    }).then((fn) => {
+      if (!isMounted) fn();
+      else unlisten = fn;
+    });
+
+    return () => {
+      isMounted = false;
+      unlisten?.();
+    };
+  }, [addAccount]);
+
   const handleSignIn = async () => {
+    dbg("Login", "sign in clicked");
     setLoading(true);
     setError(null);
     try {
       const account = await startOAuthFlow();
       addAccount(account);
+      dbg("Login", "startOAuthFlow resolved", account.email);
     } catch (e) {
+      dbg("Login", "startOAuthFlow failed", e);
       setError(String(e));
     } finally {
       setLoading(false);
@@ -51,7 +85,7 @@ export default function LoginScreen() {
             <GoogleIcon />
           )}
           <span className="text-sm font-medium text-gray-700">
-            {loading ? "Opening browser..." : "Sign in with Google"}
+            {loading ? "Signing in…" : "Sign in with Google"}
           </span>
         </button>
 
@@ -61,6 +95,7 @@ export default function LoginScreen() {
 
         <p className="text-xs text-gray-400 text-center">
           Your credentials are stored securely in the macOS Keychain.
+          A browser window will open — close it after signing in.
         </p>
       </div>
     </div>

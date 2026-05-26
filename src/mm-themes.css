@@ -28,7 +28,7 @@
 
   --c-text-1:   #E6EDF3;   /* 15.8:1 on --c-surface — sender names             */
   --c-text-2:   #A8B5C1;   /*  7.5:1 — subjects                                */
-  --c-text-3:   #6E7B8B;   /*  4.1:1 — snippets, timestamps                    */
+  --c-text-3:   #8B98A8;   /*  higher-contrast muted text                      */
 
   --c-success:  #3FB950;
   --c-warning:  #D29922;
@@ -47,7 +47,7 @@
 
   --c-text-1:   #EDEDED;   /* ~15:1 on --c-surface                              */
   --c-text-2:   #A1A1A1;   /*  7.2:1                                            */
-  --c-text-3:   #666666;   /*  4.0:1                                            */
+  --c-text-3:   #8E8E8E;   /*  higher-contrast muted text                      */
 
   --c-success:  #4CAF6E;
   --c-warning:  #E6A817;
@@ -66,7 +66,7 @@
 
   --c-text-1:   #EDE0D0;   /* ~14:1 on --c-surface                              */
   --c-text-2:   #A8967E;   /*  6.8:1                                            */
-  --c-text-3:   #6B5A47;   /*  3.8:1                                            */
+  --c-text-3:   #9E8A72;   /*  higher-contrast muted text                      */
 
   --c-success:  #6BAF6A;
   --c-warning:  #D4924A;
@@ -85,7 +85,7 @@
 
   --c-text-1:   #1F2328;   /* ~16:1 on white                                    */
   --c-text-2:   #4B5563;   /*  8.5:1                                            */
-  --c-text-3:   #6E7781;   /*  4.6:1                                            */
+  --c-text-3:   #57606A;   /*  higher-contrast muted text                      */
 
   --c-success:  #1A7F37;
   --c-warning:  #9A6700;
@@ -104,7 +104,7 @@
 
   --c-text-1:   #171717;
   --c-text-2:   #525252;
-  --c-text-3:   #737373;
+  --c-text-3:   #5F5F5F;
 
   --c-success:  #166534;
   --c-warning:  #854D0E;
@@ -123,12 +123,49 @@
 
   --c-text-1:   #2A1F12;
   --c-text-2:   #5C4A35;
-  --c-text-3:   #8A7660;
+  --c-text-3:   #6F5D49;
 
   --c-success:  #3D6B2A;
   --c-warning:  #8A5A0A;
   --c-error:    #B83025;
   --c-info:     #2A5FA8;
+}
+
+/* ── Custom Theme defaults — user-selected values are applied as inline vars ─ */
+[data-theme="mm-custom-dark"] {
+  --c-bg:       #101014;
+  --c-surface:  #181A20;
+  --c-overlay:  #242833;
+  --c-border:   #373D4A;
+  --c-accent:   #E66B66;
+  --c-accent-fg:#FFFFFF;
+
+  --c-text-1:   #F2F4F8;
+  --c-text-2:   #B6C0CC;
+  --c-text-3:   #909AAA;
+
+  --c-success:  #4CAF6E;
+  --c-warning:  #E6A817;
+  --c-error:    #F06565;
+  --c-info:     #5B9CF6;
+}
+
+[data-theme="mm-custom-light"] {
+  --c-bg:       #F6F7FB;
+  --c-surface:  #FFFFFF;
+  --c-overlay:  #EEF1F6;
+  --c-border:   #D2D8E2;
+  --c-accent:   #CF4335;
+  --c-accent-fg:#FFFFFF;
+
+  --c-text-1:   #151820;
+  --c-text-2:   #4B5563;
+  --c-text-3:   #5F6977;
+
+  --c-success:  #166534;
+  --c-warning:  #854D0E;
+  --c-error:    #B91C1C;
+  --c-info:     #1D4ED8;
 }
 
 /* ── Legacy aliases — keep old variable names working during migration ────────
@@ -213,3 +250,43 @@ html[data-theme] .email-body a { color: var(--c-info) !important; }
 /* Snippet text */
 .snippet-text { color: var(--c-text-3, #6b7280); }
 html[data-theme] .snippet-text { color: var(--c-text-3) !important; }
+
+/* ── Global text scaling ──────────────────────────────────────────────────────
+   Many app components intentionally use Tailwind arbitrary px classes. Root
+   font-size alone does not affect those classes, so scale the common text
+   utilities directly while leaving spacing and icon geometry alone.            */
+html[data-font-scale] {
+  --mm-font-scale: 1;
+}
+
+html[data-font-scale] body,
+html[data-font-scale] input,
+html[data-font-scale] textarea,
+html[data-font-scale] button,
+html[data-font-scale] select {
+  font-size: calc(1rem * var(--mm-font-scale));
+}
+
+html[data-font-scale] .text-\[8px\]  { font-size: calc(8px  * var(--mm-font-scale)) !important; }
+html[data-font-scale] .text-\[9px\]  { font-size: calc(9px  * var(--mm-font-scale)) !important; }
+html[data-font-scale] .text-\[10px\] { font-size: calc(10px * var(--mm-font-scale)) !important; }
+html[data-font-scale] .text-\[11px\] { font-size: calc(11px * var(--mm-font-scale)) !important; }
+html[data-font-scale] .text-\[12px\] { font-size: calc(12px * var(--mm-font-scale)) !important; }
+html[data-font-scale] .text-\[13px\] { font-size: calc(13px * var(--mm-font-scale)) !important; }
+html[data-font-scale] .text-\[14px\] { font-size: calc(14px * var(--mm-font-scale)) !important; }
+html[data-font-scale] .text-\[15px\] { font-size: calc(15px * var(--mm-font-scale)) !important; }
+html[data-font-scale] .text-\[28px\] { font-size: calc(28px * var(--mm-font-scale)) !important; }
+
+html[data-font-scale] .text-xs   { font-size: calc(0.75rem  * var(--mm-font-scale)) !important; }
+html[data-font-scale] .text-sm   { font-size: calc(0.875rem * var(--mm-font-scale)) !important; }
+html[data-font-scale] .text-base { font-size: calc(1rem     * var(--mm-font-scale)) !important; }
+html[data-font-scale] .text-lg   { font-size: calc(1.125rem * var(--mm-font-scale)) !important; }
+html[data-font-scale] .text-xl   { font-size: calc(1.25rem  * var(--mm-font-scale)) !important; }
+html[data-font-scale] .text-2xl  { font-size: calc(1.5rem   * var(--mm-font-scale)) !important; }
+html[data-font-scale] .text-3xl  { font-size: calc(1.875rem * var(--mm-font-scale)) !important; }
+html[data-font-scale] .text-4xl  { font-size: calc(2.25rem  * var(--mm-font-scale)) !important; }
+html[data-font-scale] .text-5xl  { font-size: calc(3rem     * var(--mm-font-scale)) !important; }
+
+html[data-font-scale] .email-body {
+  font-size: calc(14px * var(--mm-font-scale)) !important;
+}

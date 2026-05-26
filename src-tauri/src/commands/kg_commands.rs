@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, State};
+use tauri_plugin_store::StoreExt;
 
 use crate::db::kg_queries::{self, KgGraphPayload, KgNode};
 use crate::AppState;
@@ -16,10 +17,7 @@ pub struct KgStatusResponse {
 }
 
 #[tauri::command]
-pub async fn start_kg_crawl(
-    state: State<'_, AppState>,
-    app: AppHandle,
-) -> Result<(), String> {
+pub async fn start_kg_crawl(state: State<'_, AppState>, app: AppHandle) -> Result<(), String> {
     // Check if already running
     {
         let conn = state.db.lock().await;
@@ -51,7 +49,8 @@ pub async fn start_kg_crawl(
         drop(api); // release read lock before re-acquiring
 
         let api = state.api.read().await;
-        if let Err(e) = crate::kg::enricher::run_enrichment_batch(&api, &state.db, &app_clone).await {
+        if let Err(e) = crate::kg::enricher::run_enrichment_batch(&api, &state.db, &app_clone).await
+        {
             eprintln!("KG enrichment error: {}", e);
         }
     });
@@ -87,4 +86,24 @@ pub async fn get_kg_node(
 ) -> Result<Option<KgNode>, String> {
     let conn = state.db.lock().await;
     kg_queries::get_kg_node(&conn, &file_id).map_err(|e| e.to_string())
+}
+
+// ── Enrichment Tier ───────────────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn set_kg_tier(app: AppHandle, tier: String) -> Result<(), String> {
+    let store = app.store("preferences.json").map_err(|e| e.to_string())?;
+    store.set("gemini_enrichment_tier", serde_json::json!(tier));
+    store.save().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn get_kg_tier(app: AppHandle) -> Result<String, String> {
+    let store = app.store("preferences.json").map_err(|e| e.to_string())?;
+    let tier = store
+        .get("gemini_enrichment_tier")
+        .and_then(|v| v.as_str().map(String::from))
+        .unwrap_or_else(|| "ultra".to_string());
+    Ok(tier)
 }

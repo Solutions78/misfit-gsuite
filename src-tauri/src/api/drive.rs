@@ -251,6 +251,7 @@ pub struct DriveFileKgListResponse {
     pub next_page_token: Option<String>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DriveChange {
@@ -260,6 +261,7 @@ pub struct DriveChange {
     pub file: Option<DriveFileKg>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DriveChangesResponse {
@@ -312,7 +314,10 @@ pub async fn list_files_for_kg(
     if !resp.status().is_success() {
         let status = resp.status().as_u16();
         let msg = resp.text().await.unwrap_or_default();
-        return Err(AppError::Api { status, message: msg });
+        return Err(AppError::Api {
+            status,
+            message: msg,
+        });
     }
 
     resp.json::<DriveFileKgListResponse>()
@@ -340,7 +345,10 @@ pub async fn get_changes_start_token(client: &ApiClient) -> Result<String, AppEr
     if !resp.status().is_success() {
         let status = resp.status().as_u16();
         let msg = resp.text().await.unwrap_or_default();
-        return Err(AppError::Api { status, message: msg });
+        return Err(AppError::Api {
+            status,
+            message: msg,
+        });
     }
 
     let body: serde_json::Value = resp
@@ -355,6 +363,7 @@ pub async fn get_changes_start_token(client: &ApiClient) -> Result<String, AppEr
 }
 
 /// Fetch changes from the Drive Changes API for delta sync.
+#[allow(dead_code)]
 pub async fn list_changes(
     client: &ApiClient,
     page_token: &str,
@@ -379,7 +388,10 @@ pub async fn list_changes(
     if !resp.status().is_success() {
         let status = resp.status().as_u16();
         let msg = resp.text().await.unwrap_or_default();
-        return Err(AppError::Api { status, message: msg });
+        return Err(AppError::Api {
+            status,
+            message: msg,
+        });
     }
 
     resp.json::<DriveChangesResponse>()

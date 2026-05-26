@@ -197,16 +197,18 @@ pub async fn exchange_code(
         ("code_verifier", verifier),
     ];
 
-    let resp = client
-        .post(GOOGLE_TOKEN_URL)
-        .form(&params)
-        .send()
-        .await?
-        .error_for_status()?
-        .json::<TokenResponse>()
-        .await?;
+    let resp = client.post(GOOGLE_TOKEN_URL).form(&params).send().await?;
 
-    Ok(resp)
+    let status = resp.status();
+    if !status.is_success() {
+        let message = resp.text().await.unwrap_or_default();
+        return Err(AppError::Api {
+            status: status.as_u16(),
+            message,
+        });
+    }
+
+    Ok(resp.json::<TokenResponse>().await?)
 }
 
 pub async fn refresh_token(
@@ -222,16 +224,18 @@ pub async fn refresh_token(
         ("grant_type", "refresh_token"),
     ];
 
-    let resp = client
-        .post(GOOGLE_TOKEN_URL)
-        .form(&params)
-        .send()
-        .await?
-        .error_for_status()?
-        .json::<TokenResponse>()
-        .await?;
+    let resp = client.post(GOOGLE_TOKEN_URL).form(&params).send().await?;
 
-    Ok(resp)
+    let status = resp.status();
+    if !status.is_success() {
+        let message = resp.text().await.unwrap_or_default();
+        return Err(AppError::Api {
+            status: status.as_u16(),
+            message,
+        });
+    }
+
+    Ok(resp.json::<TokenResponse>().await?)
 }
 
 pub async fn fetch_user_info(
@@ -242,11 +246,18 @@ pub async fn fetch_user_info(
         .get("https://www.googleapis.com/oauth2/v3/userinfo")
         .bearer_auth(access_token)
         .send()
-        .await?
-        .error_for_status()?
-        .json::<UserInfo>()
         .await?;
-    Ok(resp)
+
+    let status = resp.status();
+    if !status.is_success() {
+        let message = resp.text().await.unwrap_or_default();
+        return Err(AppError::Api {
+            status: status.as_u16(),
+            message,
+        });
+    }
+
+    Ok(resp.json::<UserInfo>().await?)
 }
 
 pub async fn run_oauth_callback_server(expected_state: String) -> Result<String, AppError> {
@@ -272,18 +283,27 @@ pub async fn run_oauth_callback_server(expected_state: String) -> Result<String,
                     Err("No code received".to_string())
                 };
 
+                let html = match &result {
+                    Ok(_) => r#"<html><body style="font-family:system-ui;text-align:center;padding:60px">
+                        <h2>✅ Google sign-in received</h2>
+                        <p>Return to Misfit GSuite while the app finishes securely storing your session.</p>
+                        <script>setTimeout(()=>window.close(),2000)</script>
+                    </body></html>"#
+                        .to_string(),
+                    Err(message) => format!(
+                        r#"<html><body style="font-family:system-ui;text-align:center;padding:60px">
+                        <h2>❌ Google sign-in failed</h2>
+                        <p>{}</p>
+                    </body></html>"#,
+                        message
+                    ),
+                };
+
                 if let Some(sender) = tx.lock().await.take() {
                     let _ = sender.send(result);
                 }
 
-                Html(
-                    r#"<html><body style="font-family:system-ui;text-align:center;padding:60px">
-                    <h2>✅ Signed in successfully!</h2>
-                    <p>You can close this tab and return to Misfit GSuite.</p>
-                    <script>setTimeout(()=>window.close(),2000)</script>
-                </body></html>"#
-                        .to_string(),
-                )
+                Html(html)
             }
         }),
     );
@@ -298,8 +318,9 @@ pub async fn run_oauth_callback_server(expected_state: String) -> Result<String,
         let _ = server.await;
     });
 
-    let code = rx
+    let code = tokio::time::timeout(std::time::Duration::from_secs(300), rx)
         .await
+        .map_err(|_| AppError::Auth("OAuth callback timed out after 5 minutes".to_string()))?
         .map_err(|_| AppError::Auth("OAuth callback channel dropped".to_string()))?
         .map_err(|e| AppError::Auth(e))?;
 
@@ -314,7 +335,10 @@ pub fn token_response_to_set(
     user_info: UserInfo,
 ) -> Result<TokenSet, AppError> {
     let refresh_token = resp.refresh_token.or(existing_refresh).ok_or_else(|| {
-        AppError::Auth("No refresh token returned by Google. Re-authenticate to obtain a new token.".to_string())
+        AppError::Auth(
+            "No refresh token returned by Google. Re-authenticate to obtain a new token."
+                .to_string(),
+        )
     })?;
     let expires_at = Utc::now() + Duration::seconds(resp.expires_in);
     let scopes = resp

@@ -3,12 +3,12 @@ import { listen } from "@tauri-apps/api/event";
 import "./App.css";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useAuthStore } from "@/store/authStore";
-import { getCurrentAccount, listAccounts } from "@/lib/tauri";
+import { getCurrentAccount, hasAppCredentials, listAccounts } from "@/lib/tauri";
 import { dbg } from "@/lib/debugLog";
 import AppShell from "@/components/layout/AppShell";
 
-const IS_DEV = import.meta.env.DEV;
 import LoginScreen from "@/components/auth/LoginScreen";
+import SetupScreen from "@/components/auth/SetupScreen";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -55,8 +55,28 @@ function AppContent() {
   const { isAuthenticated, setCurrentAccount, addAccount, reset } = useAuthStore();
   const [authChecked, setAuthChecked] = useState(false);
   const [hasStoredAccount, setHasStoredAccount] = useState(false);
+  const [setupChecked, setSetupChecked] = useState(false);
+  const [needsSetup, setNeedsSetup] = useState(false);
+
+  // Check for GCP credentials before anything else.
+  useEffect(() => {
+    hasAppCredentials()
+      .then((has) => {
+        setNeedsSetup(!has);
+        setSetupChecked(true);
+      })
+      .catch(() => {
+        // If the check itself fails (e.g. in web preview), skip setup screen.
+        setNeedsSetup(false);
+        setSetupChecked(true);
+      });
+  }, []);
 
   useEffect(() => {
+    // Don't attempt auth restore until we know setup is done.
+    // If setup is still pending, skip — this effect re-runs when needsSetup flips.
+    if (!setupChecked || needsSetup) return;
+
     let isMounted = true;
     let unlistenRestored: (() => void) | undefined;
     let unlistenComplete: (() => void) | undefined;
@@ -70,7 +90,7 @@ function AppContent() {
         // token and removes stale DB rows when the Keychain item was deleted.
         const account = await getCurrentAccount();
         const accounts = await listAccounts();
-        if (IS_DEV) dbg("Auth", "restoring accounts", { account, accounts });
+        dbg("Auth", "restoring accounts", { account, accounts });
         if (!isMounted) return;
         if (account) {
           accounts.forEach((a) => addAccount(a));
@@ -81,7 +101,7 @@ function AppContent() {
         }
         setAuthChecked(true);
       } catch (err) {
-        if (IS_DEV) dbg("Auth", "restore failed", err);
+        dbg("Auth", "restore failed", err);
         if (!isMounted) return;
         reset();
         setHasStoredAccount(false);
@@ -90,7 +110,7 @@ function AppContent() {
     };
 
     listen<string>("auth::restored", (event) => {
-      if (IS_DEV) dbg("Auth", "event: restored", event.payload);
+      dbg("Auth", "event: restored", event.payload);
       restore();
     }).then((fn) => {
       if (!isMounted) fn();
@@ -98,7 +118,7 @@ function AppContent() {
     });
 
     listen<string>("auth::complete", (event) => {
-      if (IS_DEV) dbg("Auth", "event: complete", event.payload);
+      dbg("Auth", "event: complete", event.payload);
       restore();
     }).then((fn) => {
       if (!isMounted) fn();
@@ -106,7 +126,7 @@ function AppContent() {
     });
 
     listen<string>("auth::signed_out", (event) => {
-      if (IS_DEV) dbg("Auth", "event: signed_out", event.payload);
+      dbg("Auth", "event: signed_out", event.payload);
       reset();
       setHasStoredAccount(false);
       setAuthChecked(true);
@@ -116,7 +136,7 @@ function AppContent() {
     });
 
     listen<string>("auth::restore_failed", (event) => {
-      if (IS_DEV) dbg("Auth", "event: restore_failed", event.payload);
+      dbg("Auth", "event: restore_failed", event.payload);
       reset();
       setHasStoredAccount(false);
       setAuthChecked(true);
@@ -126,7 +146,7 @@ function AppContent() {
     });
 
     listen<string>("auth::token_revoked", (event) => {
-      if (IS_DEV) dbg("Auth", "event: token_revoked — refresh token rejected by Google", event.payload);
+      dbg("Auth", "event: token_revoked — refresh token rejected by Google", event.payload);
       reset();
       setHasStoredAccount(false);
       setAuthChecked(true);
@@ -145,21 +165,38 @@ function AppContent() {
       unlistenRestoreFailed?.();
       unlistenTokenRevoked?.();
     };
-  }, []);
+  }, [setupChecked, needsSetup]);
 
   useEffect(() => {
     if (isAuthenticated || !authChecked || !hasStoredAccount) return;
 
     const timeout = window.setTimeout(() => {
-      if (IS_DEV) {
-        dbg("Auth", "stored account did not unlock; falling back to login");
-      }
+      dbg("Auth", "stored account did not unlock; falling back to login");
       reset();
       setHasStoredAccount(false);
     }, 10_000);
 
     return () => window.clearTimeout(timeout);
   }, [authChecked, hasStoredAccount, isAuthenticated, reset]);
+
+  // Still waiting for the Keychain credentials check.
+  if (!setupChecked) {
+    return (
+      <div className="h-screen flex items-center justify-center" style={{ background: "var(--mm-bg)" }}>
+        <div className="w-5 h-5 rounded-full border-2 border-t-transparent animate-spin" style={{ borderColor: "var(--mm-text-muted)" }} />
+      </div>
+    );
+  }
+
+  if (needsSetup) {
+    return (
+      <SetupScreen
+        onComplete={() => {
+          setNeedsSetup(false);
+        }}
+      />
+    );
+  }
 
   if (!isAuthenticated) {
     // Waiting for Keychain/Touch ID approval — show spinner instead of login screen.
