@@ -1,9 +1,12 @@
+//! Knowledge Graph Semantic Enricher
+//!
+//! This module utilizes Gemini AI to transform raw file metadata into high-fidelity knowledge nodes.
+//! It performs deep analysis of document content to extract semantic tags, summaries, and entities.
+
 use futures::stream::{self, StreamExt};
 use tauri::{AppHandle, Emitter};
-use tauri_plugin_store::StoreExt;
 use tokio::sync::Mutex;
 use tokio::time::{sleep, Duration};
-use tracing::{info, warn};
 
 use crate::api::{client::ApiClient, gemini, gemini_tools};
 use crate::db::kg_queries::{self, EnrichmentResult, KgEntity, KgNode, KgRelationship};
@@ -12,7 +15,7 @@ use crate::error::AppError;
 const CONCURRENT_ENRICHMENT_LIMIT: usize = 3;
 
 // ---------------------------------------------------------------------------
-// Public entry point
+// Public entry points
 // ---------------------------------------------------------------------------
 
 pub async fn run_enrichment_batch(
@@ -20,9 +23,31 @@ pub async fn run_enrichment_batch(
     db: &Mutex<rusqlite::Connection>,
     app: &AppHandle,
 ) -> Result<(), AppError> {
-    info!(
-        "KG Enricher: Starting batch enrichment (Concurrency: {})",
-        CONCURRENT_ENRICHMENT_LIMIT
+    run_enrichment_internal(api, db, Some(app)).await
+}
+
+pub async fn run_enrichment_batch_headless(
+    api: &ApiClient,
+    db: &Mutex<rusqlite::Connection>,
+) -> Result<(), AppError> {
+    run_enrichment_internal(api, db, None).await
+}
+
+// ---------------------------------------------------------------------------
+// Shared Logic
+// ---------------------------------------------------------------------------
+
+async fn run_enrichment_internal(
+    api: &ApiClient,
+    db: &Mutex<rusqlite::Connection>,
+    app: Option<&AppHandle>,
+) -> Result<(), AppError> {
+    crate::logging::info(
+        "kg.enricher",
+        format!(
+            "Starting batch enrichment (Concurrency: {})",
+            CONCURRENT_ENRICHMENT_LIMIT
+        ),
     );
 
     // Pick the Gemini model once up-front
@@ -31,30 +56,14 @@ pub async fn run_enrichment_batch(
         .unwrap_or_else(|_| "gemini-2.0-flash-latest".to_string());
 
     loop {
-        // ── 0. Read tier from store to determine batch params ─────────────
-        let (batch_size, file_sleep_ms, batch_sleep_ms) = {
-            let tier = app
-                .store("preferences.json")
-                .ok()
-                .and_then(|s| s.get("gemini_enrichment_tier"))
-                .and_then(|v| v.as_str().map(String::from))
-                .unwrap_or_else(|| "ultra".to_string());
-
-            match tier.as_str() {
-                "free" => (5usize, 1000u64, 2000u64),
-                "pro" => (20usize, 300u64, 1000u64),
-                _ => (50usize, 200u64, 500u64), // "ultra" default
-            }
-        };
-
         // ── 1. Get a batch of pending nodes ───────────────────────────────
         let batch = {
             let conn = db.lock().await;
-            kg_queries::list_nodes_pending_enrichment(&conn, batch_size)?
+            kg_queries::list_nodes_pending_enrichment(&conn, 20)? // Smaller sub-batches for better checkpointing
         };
 
         if batch.is_empty() {
-            info!("KG Enricher: No more pending nodes. Batch complete.");
+            crate::logging::info("kg.enricher", "No more pending nodes. Batch complete.");
             break;
         }
 
@@ -66,7 +75,6 @@ pub async fn run_enrichment_batch(
         }
 
         // ── 3. Process concurrently using Stream ──────────────────────────
-        // We use buffer_unordered to process N files at once
         let results = stream::iter(batch)
             .map(|node| {
                 let api_ref = api;
@@ -83,19 +91,16 @@ pub async fn run_enrichment_batch(
         // ── 4. Persist results in a single transaction ────────────────────
         {
             let conn = db.lock().await;
-            // Note: Manual BEGIN/COMMIT since we have multiple helper calls
-            // we'll just handle them sequentially here for DB safety
             for (file_id, outcome) in results {
                 match outcome {
                     EnrichOutcome::NoContent => {
                         let _ = kg_queries::mark_enrichment_done_no_content(&conn, &file_id);
                     }
                     EnrichOutcome::Done(enrichment) => {
-                        if let Err(e) = kg_queries::upsert_enrichment(&conn, &file_id, &enrichment)
-                        {
-                            warn!(
-                                "KG Enricher: upsert_enrichment failed for {}: {}",
-                                file_id, e
+                        if let Err(e) = kg_queries::upsert_enrichment(&conn, &file_id, &enrichment) {
+                            crate::logging::warn(
+                                "kg.enricher",
+                                format!("upsert_enrichment failed for {}: {}", file_id, e),
                             );
                         }
 
@@ -161,12 +166,13 @@ pub async fn run_enrichment_batch(
             state.last_activity_at = Some(now_secs());
             kg_queries::update_crawl_state(&conn, &state)?;
 
-            let _ = app.emit("kg::enrich_progress", done_count);
+            if let Some(h) = app {
+                let _ = h.emit("kg::enrich_progress", done_count);
+            }
         }
 
-        // Cooldown between batches (tier-dependent)
-        let _ = file_sleep_ms; // consumed per-file in concurrent path; keep for future sequential use
-        sleep(Duration::from_millis(batch_sleep_ms)).await;
+        // Small cooldown between batches
+        sleep(Duration::from_millis(500)).await;
     }
 
     Ok(())

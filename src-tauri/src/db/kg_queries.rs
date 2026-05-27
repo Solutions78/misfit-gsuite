@@ -186,6 +186,14 @@ pub fn mark_enrichment_processing(conn: &Connection, file_ids: &[String]) -> Res
     Ok(())
 }
 
+pub fn cleanup_stuck_nodes(conn: &Connection) -> Result<i64, AppError> {
+    let rows = conn.execute(
+        "UPDATE kg_nodes SET enrich_status = 'pending' WHERE enrich_status = 'processing'",
+        [],
+    )?;
+    Ok(rows as i64)
+}
+
 pub fn upsert_enrichment(
     conn: &Connection,
     file_id: &str,
@@ -286,12 +294,14 @@ pub fn delete_kg_edges_for_node(conn: &Connection, file_id: &str) -> Result<(), 
 // ── Graph payload ─────────────────────────────────────────────────────────
 
 pub fn get_kg_graph(conn: &Connection) -> Result<KgGraphPayload, AppError> {
+    // 1. Fetch the top 2000 nodes based on importance score.
+    // We materialism this into a Vec first.
     let mut stmt = conn.prepare(
         "SELECT file_id, name, mime_type, web_view_link, drive_id,
                 topic_tags_json, importance_score, summary, entities_json
          FROM kg_nodes
          WHERE enrich_status IN ('done', 'pending', 'failed')
-         ORDER BY COALESCE(importance_score, 1) DESC
+         ORDER BY COALESCE(importance_score, 1) DESC, crawled_at DESC
          LIMIT 2000",
     )?;
 
@@ -343,8 +353,20 @@ pub fn get_kg_graph(conn: &Connection) -> Result<KgGraphPayload, AppError> {
         )
         .collect::<Vec<_>>();
 
-    let mut estmt =
-        conn.prepare("SELECT source_id, target_id, edge_type, weight, label FROM kg_edges")?;
+    // 2. Fetch only edges that connect these 2000 nodes.
+    // Optimization: Use a CTE (Common Table Expression) to ensure SQLite only scans relevant rows once.
+    let mut estmt = conn.prepare(
+        "WITH visible_nodes AS (
+             SELECT file_id FROM kg_nodes 
+             WHERE enrich_status IN ('done', 'pending', 'failed') 
+             ORDER BY COALESCE(importance_score, 1) DESC, crawled_at DESC LIMIT 2000
+         )
+         SELECT e.source_id, e.target_id, e.edge_type, e.weight, e.label 
+         FROM kg_edges e
+         JOIN visible_nodes s ON e.source_id = s.file_id
+         JOIN visible_nodes t ON e.target_id = t.file_id",
+    )?;
+
     let edges = estmt
         .query_map([], |row| {
             Ok(KgEdgeView {

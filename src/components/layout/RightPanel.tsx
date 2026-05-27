@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   deleteChatSpace,
@@ -55,6 +56,23 @@ export default function RightPanel() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const qc = useQueryClient();
   const currentAccount = useAuthStore((s) => s.currentAccount);
+
+  useEffect(() => {
+    let isMounted = true;
+    let unlisten: (() => void) | undefined;
+
+    listen<number>("chat::display_names_updated", () => {
+      qc.invalidateQueries({ queryKey: ["spaces"] });
+    }).then((fn) => {
+      if (!isMounted) fn();
+      else unlisten = fn;
+    });
+
+    return () => {
+      isMounted = false;
+      unlisten?.();
+    };
+  }, [qc]);
 
   const { data: spaces, isLoading: spacesLoading, error: spacesError } = useQuery({
     queryKey: ["spaces"],
@@ -701,6 +719,7 @@ function ContactAvatar({ contact }: { contact: ContactSuggestion }) {
 function getSpaceLabel(space: Space) {
   const displayName = space.displayName?.trim();
   if (displayName) return displayName;
+  if (space.spaceType === "DIRECT_MESSAGE" && space.singleUserBotDm) return "Bot chat";
   if (space.spaceType === "DIRECT_MESSAGE") return "Unknown direct message";
   if (space.spaceType === "GROUP_CHAT") return "Unnamed group chat";
   return space.name.split("/").pop() ?? "Unknown";

@@ -66,6 +66,23 @@ CREATE TABLE IF NOT EXISTS hidden_chat_spaces (
     PRIMARY KEY (account_email, space_name)
 );
 
+CREATE TABLE IF NOT EXISTS chat_space_display_names (
+    account_email TEXT NOT NULL,
+    space_name TEXT NOT NULL,
+    space_type TEXT,
+    single_user_bot_dm INTEGER DEFAULT 0,
+    display_name TEXT,
+    status TEXT NOT NULL DEFAULT 'pending',
+    attempts INTEGER NOT NULL DEFAULT 0,
+    last_attempt_at INTEGER,
+    next_retry_at INTEGER,
+    updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+    PRIMARY KEY (account_email, space_name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_chat_space_display_due
+ON chat_space_display_names(account_email, status, next_retry_at);
+
 CREATE TABLE IF NOT EXISTS docs_cache (
   doc_id TEXT PRIMARY KEY,
   title TEXT NOT NULL,

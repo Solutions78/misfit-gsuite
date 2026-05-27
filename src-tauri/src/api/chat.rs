@@ -1,6 +1,5 @@
 use std::collections::{HashMap, HashSet};
 
-use futures::future::join_all;
 use serde::{Deserialize, Serialize};
 
 use crate::api::client::ApiClient;
@@ -192,76 +191,48 @@ struct BotDmResolution {
     pub hide: bool,
 }
 
+#[derive(Debug, Clone)]
+pub struct ChatDisplayNameResolution {
+    pub display_name: Option<String>,
+    pub hide: bool,
+}
+
 // ── API functions ──────────────────────────────────────────────────────────
 
 pub async fn list_spaces(client: &ApiClient) -> Result<Vec<Space>, AppError> {
+    crate::logging::info("chat.spaces", "base list_spaces fetch started");
     let url = format!("{}/spaces?pageSize=100", CHAT_BASE);
     let resp = client.get(&url).await?.json::<SpaceListResponse>().await?;
-    let mut spaces = resp.spaces.unwrap_or_default();
+    let spaces = resp.spaces.unwrap_or_default();
+    crate::logging::info(
+        "chat.spaces",
+        format!("base list_spaces fetch finished count={}", spaces.len()),
+    );
+    Ok(spaces)
+}
 
-    // Get the current user's Google user ID for reliable self-exclusion.
-    let self_user_id = current_google_user_id(client).await;
-
-    // Resolve display names for DM and GROUP_CHAT spaces that have no displayName.
-    // Bot DMs often don't expose a displayName, so infer their app name from
-    // their own messages. Empty bot DMs are hidden from the local list.
-    let needs_resolve: Vec<usize> = spaces
-        .iter()
-        .enumerate()
-        .filter(|(_, s)| {
-            let t = s.space_type.as_deref();
-            (t == Some("DIRECT_MESSAGE") || t == Some("GROUP_CHAT"))
-                && s.display_name
-                    .as_deref()
-                    .map(|n| n.is_empty())
-                    .unwrap_or(true)
-        })
-        .map(|(i, _)| i)
-        .collect();
-
-    if !needs_resolve.is_empty() {
-        let futs: Vec<_> = needs_resolve
-            .iter()
-            .map(|&i| {
-                let name = spaces[i].name.clone();
-                let is_dm = spaces[i].space_type.as_deref() == Some("DIRECT_MESSAGE");
-                let is_bot_dm = spaces[i].single_user_bot_dm.unwrap_or(false);
-                let self_id = self_user_id.clone();
-                async move {
-                    if is_bot_dm {
-                        let resolution = resolve_bot_dm_display_name(client, &name).await;
-                        (i, resolution.display_name, resolution.hide)
-                    } else {
-                        (
-                            i,
-                            resolve_space_display_name(client, &name, is_dm, self_id.as_deref())
-                                .await,
-                            false,
-                        )
-                    }
-                }
-            })
-            .collect();
-
-        let results = join_all(futs).await;
-        let mut keep_space = vec![true; spaces.len()];
-        for (i, display_name, hide) in results {
-            if hide {
-                keep_space[i] = false;
-                continue;
-            }
-            if let Some(dn) = display_name {
-                spaces[i].display_name = Some(dn);
-            }
-        }
-        spaces = spaces
-            .into_iter()
-            .enumerate()
-            .filter_map(|(i, space)| keep_space.get(i).copied().unwrap_or(true).then_some(space))
-            .collect();
+pub async fn resolve_space_display_name_for_cache(
+    client: &ApiClient,
+    space: &Space,
+) -> ChatDisplayNameResolution {
+    if space.single_user_bot_dm.unwrap_or(false) {
+        let resolution = resolve_bot_dm_display_name(client, &space.name).await;
+        return ChatDisplayNameResolution {
+            display_name: resolution.display_name,
+            hide: resolution.hide,
+        };
     }
 
-    Ok(spaces)
+    let space_type = space.space_type.as_deref();
+    let is_dm = space_type == Some("DIRECT_MESSAGE");
+    let self_user_id = current_google_user_id(client).await;
+    let display_name =
+        resolve_space_display_name(client, &space.name, is_dm, self_user_id.as_deref()).await;
+
+    ChatDisplayNameResolution {
+        display_name,
+        hide: false,
+    }
 }
 
 pub async fn search_contacts(
@@ -362,8 +333,7 @@ async fn resolve_bot_dm_display_name(client: &ApiClient, space_name: &str) -> Bo
                     .as_ref()
                     .and_then(|sender| display_label(sender.display_name.as_deref()))
             })
-        })
-        .or_else(|| Some("Bot chat".to_string()));
+        });
 
     BotDmResolution {
         display_name,

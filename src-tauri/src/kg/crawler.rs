@@ -1,11 +1,54 @@
+//! Knowledge Graph Crawler Engine
+//!
+//! This module implements a high-performance, resilient background crawler for Google Drive.
+//! It builds a local "digital brain" by indexing file metadata and structural relationships.
+
 use tauri::{AppHandle, Emitter};
 use tokio::sync::Mutex;
-use tracing::info;
 
 use crate::api::client::ApiClient;
 use crate::api::drive;
 use crate::db::kg_queries::{self, KgCrawlState, KgNode};
 use crate::error::AppError;
+
+// ── High-Value MIME Whitelist ─────────────────────────────────────────────
+
+const KG_MIME_WHITELIST: &[&str] = &[
+    "application/vnd.google-apps.folder",
+    "application/vnd.google-apps.document",
+    "application/vnd.google-apps.spreadsheet",
+    "application/vnd.google-apps.presentation",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    "application/pdf",
+    "text/markdown",
+    "text/plain",
+    "text/csv",
+    "text/tab-separated-values",
+    "text/javascript",
+    "application/x-shellscript",
+];
+
+fn is_high_value(name: &str, mime_type: &str) -> bool {
+    // 1. Ignore hidden files
+    if name.starts_with('.') {
+        return false;
+    }
+
+    // 2. Check whitelist
+    if KG_MIME_WHITELIST.contains(&mime_type) {
+        return true;
+    }
+
+    // 3. Check media and code patterns
+    let mt = mime_type.to_lowercase();
+    if mt.starts_with("video/") || mt.starts_with("audio/") || mt.starts_with("text/x-") {
+        return true;
+    }
+
+    false
+}
 
 // ── Conversion helper ─────────────────────────────────────────────────────
 
@@ -67,18 +110,19 @@ pub async fn run_full_crawl(
         kg_queries::get_crawl_state(&conn)?
     };
 
-    // If already done, don't re-run full crawl unless forced (this fn is for the background resume)
     if state.crawl_status == "done" && state.changes_page_token.is_some() {
         return Ok(());
     }
 
-    info!(
-        "KG Crawler: Starting/Resuming full crawl. Current status: {}",
-        state.crawl_status
+    crate::logging::info(
+        "kg.crawler",
+        format!(
+            "Starting/Resuming full crawl. Current status: {}",
+            state.crawl_status
+        ),
     );
 
-    // Initialize state if idle
-    if state.crawl_status == "idle" {
+    if state.crawl_status == "idle" || state.crawl_status == "failed" {
         state.crawl_status = "running".to_string();
         state.crawled_files = 0;
         state.total_files = 0;
@@ -102,7 +146,14 @@ pub async fn run_full_crawl(
             let resp =
                 drive::list_files_for_kg(api, "user", None, page_token.as_deref(), 100).await?;
 
-            process_batch(db, &resp.files, &mut crawled_count).await?;
+            // Filter for high-value assets only
+            let high_value_files: Vec<_> = resp
+                .files
+                .into_iter()
+                .filter(|f| is_high_value(&f.name, &f.mime_type))
+                .collect();
+
+            process_batch(db, &high_value_files, &mut crawled_count).await?;
             let _ = app.emit("kg::crawl_progress", crawled_count);
 
             match resp.next_page_token {
@@ -121,7 +172,6 @@ pub async fn run_full_crawl(
 
     // ── 2. Shared drives ──────────────────────────────────────────────────
     let mut drives_page_token: Option<String> = None;
-
     let mut resume_drive_id = if state.active_drive_id.as_deref() == Some("shared_drives_start") {
         None
     } else {
@@ -154,7 +204,14 @@ pub async fn run_full_crawl(
                 )
                 .await?;
 
-                process_batch(db, &resp.files, &mut crawled_count).await?;
+                // Filter for high-value assets only
+                let high_value_files: Vec<_> = resp
+                    .files
+                    .into_iter()
+                    .filter(|f| is_high_value(&f.name, &f.mime_type))
+                    .collect();
+
+                process_batch(db, &high_value_files, &mut crawled_count).await?;
                 let _ = app.emit("kg::crawl_progress", crawled_count);
 
                 match resp.next_page_token {
@@ -193,9 +250,9 @@ pub async fn run_full_crawl(
         kg_queries::update_crawl_state(&conn, &state)?;
     }
 
-    info!(
-        "KG Crawler: Full crawl complete. Files indexed: {}",
-        crawled_count
+    crate::logging::info(
+        "kg.crawler",
+        format!("Full crawl complete. Files indexed: {}", crawled_count),
     );
     let _ = app.emit("kg::crawl_complete", crawled_count);
     Ok(())
@@ -210,7 +267,6 @@ async fn heartbeat(
 ) -> Result<(), AppError> {
     state.last_activity_at = Some(now_secs());
     state.crawled_files = crawled_count;
-    state.total_files = crawled_count;
 
     let conn = db.lock().await;
     kg_queries::update_crawl_state(&conn, state)?;
@@ -251,7 +307,6 @@ fn now_secs() -> i64 {
 
 // ── Delta sync ────────────────────────────────────────────────────────────
 
-#[allow(dead_code)]
 pub async fn run_delta_sync(
     api: &ApiClient,
     db: &Mutex<rusqlite::Connection>,
@@ -269,7 +324,10 @@ pub async fn run_delta_sync(
         }
     };
 
-    info!("KG Crawler: Starting delta sync from token: {}", page_token);
+    crate::logging::info(
+        "kg.crawler",
+        format!("Starting delta sync from token: {}", page_token),
+    );
 
     state.crawl_status = "running".to_string();
     state.last_activity_at = Some(now_secs());
@@ -293,21 +351,24 @@ pub async fn run_delta_sync(
                 if change.removed {
                     kg_queries::delete_kg_node(&conn, &change.file_id)?;
                 } else if let Some(file) = &change.file {
-                    let node = drive_file_to_kg_node(file);
-                    let parents = file.parents.clone().unwrap_or_default();
-                    let file_id = file.id.clone();
+                    // Apply high-value filter during delta sync
+                    if is_high_value(&file.name, &file.mime_type) {
+                        let node = drive_file_to_kg_node(file);
+                        let parents = file.parents.clone().unwrap_or_default();
+                        let file_id = file.id.clone();
 
-                    kg_queries::upsert_kg_node(&conn, &node)?;
+                        kg_queries::upsert_kg_node(&conn, &node)?;
 
-                    for parent_id in &parents {
-                        kg_queries::insert_kg_edge(
-                            &conn,
-                            parent_id,
-                            &file_id,
-                            "folder_hierarchy",
-                            1.0,
-                            None,
-                        )?;
+                        for parent_id in &parents {
+                            kg_queries::insert_kg_edge(
+                                &conn,
+                                parent_id,
+                                &file_id,
+                                "folder_hierarchy",
+                                1.0,
+                                None,
+                            )?;
+                        }
                     }
                 }
                 processed_changes += 1;
@@ -323,7 +384,7 @@ pub async fn run_delta_sync(
             Some(next) => {
                 page_token = next.clone();
                 state.changes_page_token = Some(next);
-                let current_crawled = state.crawled_files; // Fix borrow error
+                let current_crawled = state.crawled_files;
                 heartbeat(db, &mut state, current_crawled).await?;
             }
             None => break,
@@ -342,9 +403,12 @@ pub async fn run_delta_sync(
         kg_queries::update_crawl_state(&conn, &state)?;
     }
 
-    info!(
-        "KG Crawler: Delta sync complete. Processed {} changes.",
-        processed_changes
+    crate::logging::info(
+        "kg.crawler",
+        format!(
+            "Delta sync complete. Processed {} changes.",
+            processed_changes
+        ),
     );
     let _ = app.emit("kg::crawl_complete", ());
     Ok(())

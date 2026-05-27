@@ -1,6 +1,6 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
 use crate::error::AppError;
@@ -45,6 +45,18 @@ pub struct PendingOp {
     pub op_type: String,
     pub payload: String,
     pub attempts: i32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CachedChatDisplayName {
+    pub account_email: String,
+    pub space_name: String,
+    pub space_type: Option<String>,
+    pub single_user_bot_dm: bool,
+    pub display_name: Option<String>,
+    pub status: String,
+    pub attempts: i32,
+    pub next_retry_at: Option<i64>,
 }
 
 // ── Core message CRUD ──────────────────────────────────────────────────────
@@ -471,6 +483,226 @@ pub fn list_hidden_chat_spaces(
         results.insert(row.map_err(AppError::Database)?);
     }
     Ok(results)
+}
+
+// ── Local Chat display-name cache/retry queue ─────────────────────────────
+
+pub fn list_chat_display_name_cache(
+    conn: &Connection,
+    email: &str,
+) -> Result<HashMap<String, CachedChatDisplayName>, AppError> {
+    let mut stmt = conn.prepare(
+        "SELECT account_email, space_name, space_type, single_user_bot_dm,
+                display_name, status, attempts, next_retry_at
+         FROM chat_space_display_names
+         WHERE account_email = ?1",
+    )?;
+    let rows = stmt.query_map(params![email], |row| {
+        Ok(CachedChatDisplayName {
+            account_email: row.get(0)?,
+            space_name: row.get(1)?,
+            space_type: row.get(2)?,
+            single_user_bot_dm: row.get::<_, i32>(3)? != 0,
+            display_name: row.get(4)?,
+            status: row.get(5)?,
+            attempts: row.get(6)?,
+            next_retry_at: row.get(7)?,
+        })
+    })?;
+
+    let mut results = HashMap::new();
+    for row in rows {
+        let item = row.map_err(AppError::Database)?;
+        results.insert(item.space_name.clone(), item);
+    }
+    Ok(results)
+}
+
+pub fn queue_chat_display_name_resolution(
+    conn: &Connection,
+    email: &str,
+    space_name: &str,
+    space_type: Option<&str>,
+    single_user_bot_dm: bool,
+) -> Result<(), AppError> {
+    conn.execute(
+        "INSERT OR IGNORE INTO chat_space_display_names
+         (account_email, space_name, space_type, single_user_bot_dm, status, attempts,
+          next_retry_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, 'pending', 0, strftime('%s','now'), strftime('%s','now'))",
+        params![email, space_name, space_type, single_user_bot_dm as i32],
+    )?;
+
+    conn.execute(
+        "UPDATE chat_space_display_names
+         SET space_type = ?3,
+             single_user_bot_dm = ?4,
+             updated_at = strftime('%s','now')
+         WHERE account_email = ?1 AND space_name = ?2",
+        params![email, space_name, space_type, single_user_bot_dm as i32],
+    )?;
+    Ok(())
+}
+
+pub fn mark_chat_display_name_resolved(
+    conn: &Connection,
+    email: &str,
+    space_name: &str,
+    space_type: Option<&str>,
+    single_user_bot_dm: bool,
+    display_name: &str,
+) -> Result<(), AppError> {
+    conn.execute(
+        "INSERT INTO chat_space_display_names
+         (account_email, space_name, space_type, single_user_bot_dm, display_name, status,
+          attempts, last_attempt_at, next_retry_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, 'resolved', 0, strftime('%s','now'), NULL, strftime('%s','now'))
+         ON CONFLICT(account_email, space_name) DO UPDATE SET
+             space_type = excluded.space_type,
+             single_user_bot_dm = excluded.single_user_bot_dm,
+             display_name = excluded.display_name,
+             status = 'resolved',
+             last_attempt_at = strftime('%s','now'),
+             next_retry_at = NULL,
+             updated_at = strftime('%s','now')",
+        params![
+            email,
+            space_name,
+            space_type,
+            single_user_bot_dm as i32,
+            display_name
+        ],
+    )?;
+    Ok(())
+}
+
+pub fn mark_chat_display_name_hidden_empty(
+    conn: &Connection,
+    email: &str,
+    space_name: &str,
+    space_type: Option<&str>,
+    single_user_bot_dm: bool,
+) -> Result<(), AppError> {
+    conn.execute(
+        "INSERT INTO chat_space_display_names
+         (account_email, space_name, space_type, single_user_bot_dm, display_name, status,
+          attempts, last_attempt_at, next_retry_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, NULL, 'hidden_empty', 0, strftime('%s','now'), NULL, strftime('%s','now'))
+         ON CONFLICT(account_email, space_name) DO UPDATE SET
+             space_type = excluded.space_type,
+             single_user_bot_dm = excluded.single_user_bot_dm,
+             display_name = NULL,
+             status = 'hidden_empty',
+             last_attempt_at = strftime('%s','now'),
+             next_retry_at = NULL,
+             updated_at = strftime('%s','now')",
+        params![email, space_name, space_type, single_user_bot_dm as i32],
+    )?;
+    Ok(())
+}
+
+pub fn mark_chat_display_name_failed(
+    conn: &Connection,
+    email: &str,
+    space_name: &str,
+    error: &str,
+) -> Result<(), AppError> {
+    let current_attempts: i32 = conn
+        .query_row(
+            "SELECT attempts FROM chat_space_display_names
+             WHERE account_email = ?1 AND space_name = ?2",
+            params![email, space_name],
+            |row| row.get(0),
+        )
+        .optional()?
+        .unwrap_or(0);
+    let attempts = current_attempts.saturating_add(1);
+    let delay = chat_display_name_retry_delay_secs(attempts);
+
+    conn.execute(
+        "UPDATE chat_space_display_names
+         SET status = 'failed',
+             attempts = ?3,
+             last_attempt_at = strftime('%s','now'),
+             next_retry_at = strftime('%s','now') + ?4,
+             updated_at = strftime('%s','now')
+         WHERE account_email = ?1 AND space_name = ?2",
+        params![email, space_name, attempts, delay],
+    )?;
+
+    crate::logging::warn(
+        "chat.display_names",
+        format!(
+            "display-name resolution failed account={} space={} attempts={} next_retry_secs={} error={}",
+            email, space_name, attempts, delay, error
+        ),
+    );
+    Ok(())
+}
+
+pub fn list_due_chat_display_name_jobs(
+    conn: &Connection,
+    email: &str,
+    limit: i64,
+) -> Result<Vec<CachedChatDisplayName>, AppError> {
+    let mut stmt = conn.prepare(
+        "SELECT account_email, space_name, space_type, single_user_bot_dm,
+                display_name, status, attempts, next_retry_at
+         FROM chat_space_display_names
+         WHERE account_email = ?1
+           AND status IN ('pending', 'failed')
+           AND COALESCE(next_retry_at, 0) <= strftime('%s','now')
+         ORDER BY COALESCE(next_retry_at, 0), attempts, space_name
+         LIMIT ?2",
+    )?;
+    let rows = stmt.query_map(params![email, limit], |row| {
+        Ok(CachedChatDisplayName {
+            account_email: row.get(0)?,
+            space_name: row.get(1)?,
+            space_type: row.get(2)?,
+            single_user_bot_dm: row.get::<_, i32>(3)? != 0,
+            display_name: row.get(4)?,
+            status: row.get(5)?,
+            attempts: row.get(6)?,
+            next_retry_at: row.get(7)?,
+        })
+    })?;
+
+    let mut results = Vec::new();
+    for row in rows {
+        results.push(row.map_err(AppError::Database)?);
+    }
+    Ok(results)
+}
+
+pub fn next_chat_display_name_retry_at(
+    conn: &Connection,
+    email: &str,
+) -> Result<Option<i64>, AppError> {
+    let next = conn
+        .query_row(
+            "SELECT MIN(next_retry_at)
+             FROM chat_space_display_names
+             WHERE account_email = ?1
+               AND status IN ('pending', 'failed')
+               AND next_retry_at IS NOT NULL",
+            params![email],
+            |row| row.get::<_, Option<i64>>(0),
+        )
+        .optional()?
+        .flatten();
+    Ok(next)
+}
+
+fn chat_display_name_retry_delay_secs(attempts: i32) -> i64 {
+    match attempts {
+        0 | 1 => 30,
+        2 => 120,
+        3 => 300,
+        4 => 900,
+        5 => 1_800,
+        _ => 3_600,
+    }
 }
 
 // ── Per-message fetch helpers ──────────────────────────────────────────────

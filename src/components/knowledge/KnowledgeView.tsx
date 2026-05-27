@@ -1,8 +1,9 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Network, Play, RefreshCw, X, ExternalLink, Search } from "lucide-react";
+import { Network, Play, RefreshCw, X, ExternalLink, Search, Sparkles, Clock, Timer } from "lucide-react";
 import { getKgGraph, getKgStatus, startKgCrawl, listSharedDrives, openDriveFile } from "@/lib/tauri";
 import type { KgEdgeView, KgGraphPayload, KgNodeView, KgStatusResponse, SharedDriveListResponse } from "@/types";
+import { cn } from "@/lib/utils";
 
 // Dynamic import — Three.js is large, don't block app startup
 const ForceGraph3D = React.lazy(() => import("react-force-graph-3d"));
@@ -111,6 +112,69 @@ function buildGraphData(
   return { nodes, links };
 }
 
+// ── Progress Component ───────────────────────────────────────────────────
+
+function SynthesisProgressIndicator({ status }: { status: KgStatusResponse }) {
+  const [velocity, setVelocity] = useState<number | null>(null);
+  const lastCount = useRef<number | null>(null);
+  const lastTime = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (!status || status.enrichedFiles === lastCount.current) return;
+    const now = Date.now();
+    if (lastCount.current !== null && lastTime.current !== null) {
+      const deltaDocs = status.enrichedFiles - lastCount.current;
+      const deltaTime = (now - lastTime.current) / 1000;
+      if (deltaDocs > 0) {
+        const currentVelocity = deltaDocs / deltaTime; // docs per second
+        setVelocity((prev) => (prev ? prev * 0.8 + currentVelocity * 0.2 : currentVelocity));
+      }
+    }
+    lastCount.current = status.enrichedFiles;
+    lastTime.current = now;
+  }, [status?.enrichedFiles]);
+
+  const total = status.enrichedFiles + status.pendingEnrichment;
+  if (total === 0 || status.pendingEnrichment === 0) return null;
+  const progress = (status.enrichedFiles / total) * 100;
+
+  let etaText = "Calculating ETA...";
+  if (velocity && velocity > 0) {
+    const secondsLeft = status.pendingEnrichment / velocity;
+    if (secondsLeft > 3600) {
+      etaText = `${(secondsLeft / 3600).toFixed(1)}h remaining`;
+    } else if (secondsLeft > 60) {
+      etaText = `${Math.round(secondsLeft / 60)}m remaining`;
+    } else {
+      etaText = `${Math.round(secondsLeft)}s remaining`;
+    }
+  }
+
+  return (
+    <div className="flex flex-col items-center gap-1.5 w-full max-w-sm animate-fade-in">
+      <div className="flex justify-between w-full text-[9px] font-black uppercase tracking-widest leading-none">
+        <div className="flex items-center gap-1.5 text-blue-400">
+           <Sparkles size={10} className="animate-pulse" />
+           <span>Intelligence Synthesis</span>
+        </div>
+        <div className="flex items-center gap-1 text-gray-500">
+           <Clock size={10} />
+           <span>{etaText}</span>
+        </div>
+      </div>
+      <div className="w-full h-1 bg-gray-900 rounded-full overflow-hidden border border-white/5 relative shadow-inner">
+        <div
+          className="h-full bg-blue-500 transition-all duration-1000 shadow-[0_0_12px_rgba(59,130,246,0.6)]"
+          style={{ width: `${progress}%` }}
+        />
+      </div>
+      <div className="text-[8px] font-bold text-gray-600 uppercase tracking-widest leading-none">
+        {status.enrichedFiles.toLocaleString()} / {total.toLocaleString()} entities structured
+      </div>
+    </div>
+  );
+}
+
 // ── Main component ────────────────────────────────────────────────────────
 
 export default function KnowledgeView() {
@@ -126,7 +190,7 @@ export default function KnowledgeView() {
   const [showGemini, setShowGemini] = useState(true);
   const [showEntity, setShowEntity] = useState(true);
 
-  // Hover tooltip — track real mouse position independently (Three.js events don't reliably carry clientX/Y)
+  // Hover tooltip
   const [hovered, setHovered] = useState<{ node: GraphNode; x: number; y: number } | null>(null);
   const mousePos = useRef({ x: 0, y: 0 });
 
@@ -134,7 +198,6 @@ export default function KnowledgeView() {
   const [crawling, setCrawling] = useState(false);
   const [crawlError, setCrawlError] = useState<string | null>(null);
 
-  // ResizeObserver for accurate canvas sizing
   useEffect(() => {
     if (!containerRef.current) return;
     const ro = new ResizeObserver((entries) => {
@@ -147,7 +210,6 @@ export default function KnowledgeView() {
     return () => ro.disconnect();
   }, []);
 
-  // Track real mouse coordinates for tooltip positioning
   useEffect(() => {
     const onMove = (e: MouseEvent) => { mousePos.current = { x: e.clientX, y: e.clientY }; };
     window.addEventListener("mousemove", onMove);
@@ -157,14 +219,16 @@ export default function KnowledgeView() {
   const { data: status } = useQuery<KgStatusResponse>({
     queryKey: ["kg-status"],
     queryFn: getKgStatus,
-    refetchInterval: crawling ? 2000 : 10000,
+    // functional refetchInterval receives the Query object in v5
+    refetchInterval: (query) => (crawling || (query.state.data?.pendingEnrichment ?? 0) > 0) ? 3000 : 15000,
   });
 
   const { data: graph } = useQuery<KgGraphPayload>({
     queryKey: ["kg-graph"],
     queryFn: getKgGraph,
     staleTime: 30_000,
-    enabled: (status?.crawledFiles ?? 0) > 0,
+    // Enable if we have nodes at all, regardless of crawl status
+    enabled: !!status,
   });
 
   // Sync crawling state with status
@@ -202,21 +266,18 @@ export default function KnowledgeView() {
     setHovered({ node: n, x: mousePos.current.x, y: mousePos.current.y });
   }, []);
 
-  // Fetch shared drive names for the filter dropdown
   const { data: sharedDrivesData } = useQuery<SharedDriveListResponse>({
     queryKey: ["shared-drives"],
     queryFn: () => listSharedDrives(),
     staleTime: 5 * 60_000,
   });
 
-  // Map driveId → human name
   const driveNameMap = React.useMemo<Map<string, string>>(() => {
     const m = new Map<string, string>();
     sharedDrivesData?.drives.forEach((d) => m.set(d.id, d.name));
     return m;
   }, [sharedDrivesData]);
 
-  // Derive filter options from graph data
   const allTopics = React.useMemo(() => {
     if (!graph) return [];
     const set = new Set<string>();
@@ -224,7 +285,6 @@ export default function KnowledgeView() {
     return Array.from(set).sort();
   }, [graph]);
 
-  // Unique driveIds present in the graph, with resolved names
   const allDrives = React.useMemo(() => {
     if (!graph) return [] as { id: string; name: string }[];
     const map = new Map<string, string>();
@@ -243,7 +303,7 @@ export default function KnowledgeView() {
   }, [graph, filterTopic, filterDrive, search, showFolder, showGemini, showEntity]);
 
   const isEmpty = !graph || graph.nodes.length === 0;
-  const neverCrawled = (status?.totalFiles ?? 0) === 0 && status?.crawlStatus === "idle";
+  const neverCrawled = (status?.totalFiles ?? 0) === 0 && (status?.crawledFiles ?? 0) === 0 && status?.crawlStatus === "idle";
 
   return (
     <div className="flex flex-col h-full bg-gray-950 text-white overflow-hidden">
@@ -254,7 +314,11 @@ export default function KnowledgeView() {
           Knowledge Graph
         </span>
 
-        <div className="flex-1" />
+        <div className="flex-1 flex justify-center items-center px-12 overflow-hidden">
+            {status && (status.pendingEnrichment ?? 0) > 0 && (
+                <SynthesisProgressIndicator status={status} />
+            )}
+        </div>
 
         {/* Status badge */}
         {status && (
@@ -267,15 +331,15 @@ export default function KnowledgeView() {
                 Crawling {status.crawledFiles.toLocaleString()} / {status.totalFiles.toLocaleString()}
               </span>
             )}
-            {status.crawledFiles > 0 && (status.crawlStatus as string) !== "running" && (
+            {status.crawledFiles > 0 && (status.crawlStatus as string) !== "running" && (status.pendingEnrichment ?? 0) === 0 && (
               <span>
                 {status.crawledFiles.toLocaleString()} indexed · {status.enrichedFiles.toLocaleString()} enriched
               </span>
             )}
-            {status.pendingEnrichment > 0 && (
-              <span className="text-yellow-400">
-                · {status.pendingEnrichment.toLocaleString()} enriching
-              </span>
+            {(status.pendingEnrichment ?? 0) > 0 && (status.crawlStatus as string) !== "running" && (
+                <span className="text-yellow-400">
+                    · {status.pendingEnrichment.toLocaleString()} synthesizing
+                </span>
             )}
           </div>
         )}
@@ -394,6 +458,24 @@ export default function KnowledgeView() {
                 {status.crawledFiles.toLocaleString()} files indexed · {status.enrichedFiles.toLocaleString()} enriched
               </p>
             )}
+          </div>
+        )}
+
+        {/* If crawl is done but graph is still null or empty (loading state) */}
+        {!crawling && isEmpty && !neverCrawled && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 text-center px-12">
+            <div className="relative">
+                <RefreshCw size={32} className="animate-spin text-blue-500 opacity-20" />
+                <Sparkles size={16} className="absolute inset-0 m-auto text-blue-400 animate-pulse" />
+            </div>
+            <div className="space-y-1">
+                <p className="text-[12px] font-black uppercase tracking-[0.3em] text-gray-500">
+                    Neural Fabric Synchronizing
+                </p>
+                <p className="text-[10px] font-bold uppercase tracking-widest text-gray-700">
+                    Background intelligence analysis in progress
+                </p>
+            </div>
           </div>
         )}
 

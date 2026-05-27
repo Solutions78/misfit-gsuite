@@ -33,6 +33,10 @@ fn run_migrations(conn: &Connection) -> Result<(), AppError> {
             "004_add_kg_error_message",
             "ALTER TABLE kg_crawl_state ADD COLUMN error_message TEXT",
         ),
+        (
+            "005_add_chat_display_name_cache",
+            "SELECT 1", // chat_space_display_names created via SCHEMA constant
+        ),
     ];
 
     for (name, sql) in migrations {

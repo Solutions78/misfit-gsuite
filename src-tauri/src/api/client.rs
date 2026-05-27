@@ -5,12 +5,13 @@ use tokio::sync::{Mutex, RwLock};
 use crate::auth::{oauth, OAuthState, TokenSet};
 use crate::error::AppError;
 
+#[derive(Clone)]
 pub struct ApiClient {
     pub http: reqwest::Client,
     pub oauth_state: Arc<RwLock<OAuthState>>,
     pub client_id: String,
     pub client_secret: String,
-    pub refresh_lock: Mutex<()>,
+    pub refresh_lock: Arc<Mutex<()>>,
     pub app_handle: Option<tauri::AppHandle>,
 }
 
@@ -26,7 +27,7 @@ impl ApiClient {
             oauth_state: Arc::new(RwLock::new(OAuthState::new())),
             client_id,
             client_secret,
-            refresh_lock: Mutex::new(()),
+            refresh_lock: Arc::new(Mutex::new(())),
             app_handle: None,
         }
     }
